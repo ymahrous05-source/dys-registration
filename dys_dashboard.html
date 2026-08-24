@@ -2208,6 +2208,7 @@
 
     function renderAccountsTable(accounts) {
       const body = document.getElementById("accountsBody");
+      accounts = Array.isArray(accounts) ? accounts : [];
       if (!accounts.length) {
         body.innerHTML = `<tr><td colspan="3">مفيش حسابات مسجلة</td></tr>`;
         return;
