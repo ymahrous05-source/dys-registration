@@ -1639,7 +1639,7 @@
     }
 
     function loadRegistrationConfig() {
-      fetch(`${SCRIPT_URL}?action=publicConfig`)
+      fetch(`${SCRIPT_URL}?action=publicConfig&_=${Date.now()}`, { cache: "no-store" })
         .then(r => r.json())
         .then(res => {
           if (res.status !== "success") return;
