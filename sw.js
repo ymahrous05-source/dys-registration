@@ -5,7 +5,7 @@
 // dys_form.html, which stores a submission locally and resends it automatically
 // once the connection comes back.
 
-const CACHE_NAME = "dys-form-shell-v1";
+const CACHE_NAME = "dys-form-shell-v2";
 const APP_SHELL = [
   "./dys_form.html",
   "./manifest.webmanifest",
@@ -33,6 +33,12 @@ self.addEventListener("fetch", (event) => {
 
   // Never intercept calls to the Apps Script backend — those must always hit the network.
   if (req.url.includes("script.google.com")) return;
+
+  // Never intercept the admin dashboard — it's an admin tool, not part of the
+  // offline-capable public form, and it must always show the very latest
+  // code + data. Caching it here was the actual cause of admins seeing
+  // stale/broken dashboards after an update even on a "fresh" page load.
+  if (req.url.includes("dys_dashboard.html")) return;
 
   // Cache-first for same-origin app-shell files, network fallback for everything else.
   if (req.method === "GET") {
