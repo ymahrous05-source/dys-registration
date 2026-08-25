@@ -1663,6 +1663,7 @@
           if (regPhase !== "open") showClosedScreen();
           if (res.fieldConfig) applyFieldConfig_(res.fieldConfig);
           buildDynamicFieldsStep_(res.fieldConfig || {}, res.fieldDefs || {}, res.fieldSections || {}, res.customFields || []);
+          updateVisibleSteps_();
         })
         .catch(() => { /* backend unreachable — fall back to "always open", exactly like before */ });
     }
@@ -1868,6 +1869,19 @@
     const TOGGLEABLE_FIELD_KEYS = ["age", "gender", "phone", "whatsapp", "email",
       "faculty", "graduate", "committee", "hasJob"];
 
+    // Which of the 9 toggleable fields live inside each of the original
+    // static steps (2/3/4). Used by updateVisibleSteps_() below to hide a
+    // whole step (and its star) when every field inside it is disabled —
+    // the same "empty page shouldn't show" behavior step 5 already had.
+    const STATIC_STEP_FIELD_KEYS = {
+      2: ["phone", "whatsapp", "email"],
+      3: ["faculty", "graduate"],
+      4: ["committee", "hasJob"],
+    };
+    // The steps currently shown, in order — starts as all 4, narrowed down
+    // by updateVisibleSteps_() once the dashboard's field config loads.
+    let visibleSteps = [1, 2, 3, 4];
+
     function setOptionalHint_(fieldEl, show) {
       const label = fieldEl.querySelector("label");
       if (!label) return;
@@ -1904,6 +1918,46 @@
         fieldEl.dataset.required = conf.required ? "1" : "0";
         setOptionalHint_(fieldEl, !conf.required);
       });
+    }
+
+    // Recomputes which steps (2/3/4) actually have at least one enabled
+    // field, hides the star for any step that doesn't, drops that step's
+    // review-screen group, and rebuilds `visibleSteps` — the list the
+    // next/back buttons and the review screen actually navigate through.
+    // Must run AFTER applyFieldConfig_() (needs dataset.disabled to be set)
+    // and AFTER buildDynamicFieldsStep_() (needs the final `totalSteps`,
+    // which is 4 or 5 depending on whether step 5 has any field enabled).
+    function updateVisibleSteps_() {
+      visibleSteps = [1];
+      [2, 3, 4].forEach(step => {
+        const anyEnabled = STATIC_STEP_FIELD_KEYS[step].some(key => {
+          const fieldEl = form.querySelector(`[data-key="${key}"]`);
+          return fieldEl && fieldEl.dataset.disabled !== "1";
+        });
+        const starEl = document.querySelector(`.star[data-step="${step}"]`);
+        if (starEl) starEl.style.display = anyEnabled ? "" : "none";
+        if (anyEnabled) visibleSteps.push(step);
+      });
+      if (totalSteps === 5) visibleSteps.push(5);
+
+      // Drop the review-screen group for any static step (1–4) that just
+      // got hidden. Step 5's group is already added/removed by
+      // buildDynamicFieldsStep_, so it's left untouched here.
+      for (let i = reviewGroups.length - 1; i >= 0; i--) {
+        if (reviewGroups[i].step !== 5 && visibleSteps.indexOf(reviewGroups[i].step) === -1) {
+          reviewGroups.splice(i, 1);
+        }
+      }
+
+      // If the step currently on screen just got hidden (e.g. someone was
+      // sitting on step 2 right as the config disabled it), bump to the
+      // nearest still-visible step so nothing gets stranded.
+      if (visibleSteps.indexOf(currentStep) === -1) {
+        currentStep = visibleSteps[0];
+        showStep(currentStep);
+      } else {
+        updateStars();
+      }
     }
 
     // ---- Step 5: extra + custom fields, built entirely at runtime ----
@@ -2272,16 +2326,18 @@
       updateStars();
     }
 
-    document.getElementById("reviewBackBtn").addEventListener("click", () => showStep(totalSteps));
+    document.getElementById("reviewBackBtn").addEventListener("click", () => showStep(visibleSteps[visibleSteps.length - 1]));
 
     nextBtn.addEventListener("click", () => {
       if (!validateStep(currentStep)) return;
-      if (currentStep < totalSteps) { currentStep += 1; showStep(currentStep); return; }
+      const idx = visibleSteps.indexOf(currentStep);
+      if (idx < visibleSteps.length - 1) { currentStep = visibleSteps[idx + 1]; showStep(currentStep); return; }
       showReview();
     });
 
     backBtn.addEventListener("click", () => {
-      if (currentStep > 1) { currentStep -= 1; showStep(currentStep); }
+      const idx = visibleSteps.indexOf(currentStep);
+      if (idx > 0) { currentStep = visibleSteps[idx - 1]; showStep(currentStep); }
     });
 
     document.getElementById("confirmSubmitBtn").addEventListener("click", () => {
@@ -2574,7 +2630,7 @@
 
         document.getElementById("restoreDraftBtn").addEventListener("click", () => {
           Object.keys(draft.data).forEach(k => setFieldValue(k, draft.data[k]));
-          currentStep = draft.step && draft.step >= 1 && draft.step <= totalSteps ? draft.step : 1;
+          currentStep = draft.step && visibleSteps.indexOf(draft.step) > -1 ? draft.step : visibleSteps[0];
           showStep(currentStep);
           refreshNidInfoDisplay();
           draftBanner.classList.remove("show");
