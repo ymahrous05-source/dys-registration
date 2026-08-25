@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="512" height="512">
+  <defs>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3cb44a" />
+      <stop offset="100%" stop-color="#164028" />
+    </linearGradient>
+  </defs>
+  <rect width="120" height="120" rx="24" fill="#0a2417" />
+  <circle cx="60" cy="60" r="50" fill="#fff" stroke="url(#ring)" stroke-width="6" />
+  <circle cx="60" cy="60" r="41" fill="none" stroke="#f5ab1e" stroke-width="1.5" stroke-dasharray="2 4" />
+  <text x="60" y="57" text-anchor="middle" font-family="Cairo, Arial, sans-serif" font-weight="800" font-size="22" fill="#164028">سند</text>
+  <text x="60" y="75" text-anchor="middle" font-family="Cairo, Arial, sans-serif" font-weight="700" font-size="8" letter-spacing="2" fill="#6d8177">DELTA YOUTH</text>
+  <g fill="#f5ab1e">
+    <path transform="translate(38,20) scale(.5)" d="M12 1.5l3.09 6.26 6.91 1-5 4.87 1.18 6.87L12 17.27l-6.18 3.23L7 13.63l-5-4.87 6.91-1z" />
+    <path transform="translate(70,20) scale(.5)" d="M12 1.5l3.09 6.26 6.91 1-5 4.87 1.18 6.87L12 17.27l-6.18 3.23L7 13.63l-5-4.87 6.91-1z" />
+    <path transform="translate(38,88) scale(.5)" d="M12 1.5l3.09 6.26 6.91 1-5 4.87 1.18 6.87L12 17.27l-6.18 3.23L7 13.63l-5-4.87 6.91-1z" />
+    <path transform="translate(70,88) scale(.5)" d="M12 1.5l3.09 6.26 6.91 1-5 4.87 1.18 6.87L12 17.27l-6.18 3.23L7 13.63l-5-4.87 6.91-1z" />
+  </g>
+</svg>
