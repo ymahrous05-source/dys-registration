@@ -22,12 +22,12 @@
        what made the page look blank until fully scrolled/loaded on weak
        mobile data. This way the page paints immediately with a fallback
        font, then swaps to Cairo/JetBrains Mono once it's actually ready. -->
-  <link
-    rel="preload" as="style"
+  <link rel="preload" as="style"
     href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap"
     onload="this.onload=null;this.rel='stylesheet'">
   <noscript>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap">
+    <link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap">
   </noscript>
   <style>
     :root {
@@ -1456,10 +1456,17 @@
     const CLOUDINARY_UPLOAD_PRESET = "";    // e.g. "dys_unsigned" — Settings ▸ Upload ▸ Upload presets ▸ Add (Signing Mode: Unsigned)
     const CLOUDINARY_MAX_VIDEO_MB = 100;    // client-side size guard, adjust to taste
 
-    // Committee WhatsApp numbers: digits only, international format (20 + number without the leading 0).
-    const DYS_WHATSAPP_NUMBERS = [
-      { number: "201557510709", label: "تواصل مع تيم الـ HR" },
-      { number: "201277749241", label: "تواصل مع تيم الـ HR (رقم تاني)" },
+    // Buttons shown on the success screen after registration.
+    // Each entry is one of:
+    //   { type: "wa_dm",    number: "20...", labelAr, labelEn }  -> opens a WhatsApp DM
+    //                        to that number with a pre-filled "I just registered" message.
+    //                        number = digits only, international format (20 + number
+    //                        without the leading 0).
+    //   { type: "wa_group", url: "https://chat.whatsapp.com/...", labelAr, labelEn }
+    //                        -> opens the WhatsApp group invite link directly (no message).
+    // To hide a button, delete its entry or comment it out — that's it.
+    const DYS_SUCCESS_LINKS = [
+      { type: "wa_group", url: "https://chat.whatsapp.com/FMbxo27tHHx4pDPiGwIBVV?s=cl&p=a&mlu=4", labelAr: "انضم لجروب الواتساب", labelEn: "Join the WhatsApp group" },
     ];
 
     // ==================== i18n ====================
@@ -2546,14 +2553,20 @@
       const waMsg = encodeURIComponent(`السلام عليكم، أنا ${name}، رقم عضويتي ${memberNo}، سجّلت في استمارة سند شباب الدلتا.`);
       const waContainer = document.getElementById("whatsappButtons");
       waContainer.innerHTML = "";
-      DYS_WHATSAPP_NUMBERS.forEach(entry => {
-        if (!entry.number) return;
+      DYS_SUCCESS_LINKS.forEach(entry => {
+        const label = (currentLang === "en" ? entry.labelEn : entry.labelAr) || entry.labelAr || entry.labelEn;
         const a = document.createElement("a");
-        a.href = `https://wa.me/${entry.number}?text=${waMsg}`;
         a.className = "btn-whatsapp";
         a.target = "_blank";
         a.rel = "noopener";
-        a.textContent = entry.label || "تواصل معانا على واتساب";
+        a.textContent = label || "تواصل معانا على واتساب";
+        if (entry.type === "wa_group") {
+          if (!entry.url) return;
+          a.href = entry.url;
+        } else {
+          if (!entry.number) return;
+          a.href = `https://wa.me/${entry.number}?text=${waMsg}`;
+        }
         waContainer.appendChild(a);
       });
 
