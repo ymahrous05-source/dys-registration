@@ -16,9 +16,19 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Loaded as a non-blocking preload instead of a plain <link rel="stylesheet">:
+       on a slow connection, a regular stylesheet link makes the browser wait
+       for the whole font CSS file before it paints ANYTHING, which is exactly
+       what made the page look blank until fully scrolled/loaded on weak
+       mobile data. This way the page paints immediately with a fallback
+       font, then swaps to Cairo/JetBrains Mono once it's actually ready. -->
   <link
+    rel="preload" as="style"
     href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap"
-    rel="stylesheet">
+    onload="this.onload=null;this.rel='stylesheet'">
+  <noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap">
+  </noscript>
   <style>
     :root {
       --dys-bg-1: #0a2417;
@@ -1442,14 +1452,14 @@
     // Fill these in from your Cloudinary dashboard — see the "Cloudinary"
     // section in BACKEND_SETUP_STEPS.md. Leave CLOUD_NAME empty to disable
     // video upload entirely (the field just won't work if enabled without it).
-    const CLOUDINARY_CLOUD_NAME = "u79aqzi1";      // e.g. "dxxxxxxx" — Dashboard ▸ top-left, under your account name
-    const CLOUDINARY_UPLOAD_PRESET = "dashboard";  // e.g. "dys_unsigned" — Settings ▸ Upload ▸ Upload presets ▸ Add (Signing Mode: Unsigned)
+    const CLOUDINARY_CLOUD_NAME = "";       // e.g. "dxxxxxxx" — Dashboard ▸ top-left, under your account name
+    const CLOUDINARY_UPLOAD_PRESET = "";    // e.g. "dys_unsigned" — Settings ▸ Upload ▸ Upload presets ▸ Add (Signing Mode: Unsigned)
     const CLOUDINARY_MAX_VIDEO_MB = 100;    // client-side size guard, adjust to taste
 
     // Committee WhatsApp numbers: digits only, international format (20 + number without the leading 0).
     const DYS_WHATSAPP_NUMBERS = [
-      { number: "201277749241", label: "تواصل مع تيم الـ HR" },
-      { number: "201557510709", label: "تواصل مع تيم الـ HR (رقم تاني)" },
+      { number: "201557510709", label: "تواصل مع تيم الـ HR" },
+      { number: "201277749241", label: "تواصل مع تيم الـ HR (رقم تاني)" },
     ];
 
     // ==================== i18n ====================
@@ -1982,6 +1992,12 @@
     const DYNAMIC_FIELD_LABELS = {};
     const DYNAMIC_FIELD_TYPES = {};
     const DYNAMIC_CUSTOM_KEYS = {}; // true if the field is admin-added (goes into payload.customFields, not top-level)
+    // Custom fields only — { key: { key: parentKey, value: requiredValue } }.
+    // Populated below in buildDynamicFieldsStep_, read by
+    // evaluateConditionalFields_() to show/hide fields whose visibility
+    // depends on another field's current answer (e.g. a "committee" field
+    // that only appears once "Are you a member?" is answered "Yes").
+    const DYNAMIC_FIELD_DEPENDS = {};
     const DYNAMIC_SECTION_ORDER = ["personal", "education", "contact", "entity", "other", "custom"];
 
     function renderDynamicField_(f) {
@@ -2091,6 +2107,7 @@
         delete DYNAMIC_FIELD_LABELS[k];
         delete DYNAMIC_FIELD_TYPES[k];
         delete DYNAMIC_CUSTOM_KEYS[k];
+        delete DYNAMIC_FIELD_DEPENDS[k];
       });
 
       const bySection = {};
@@ -2106,7 +2123,10 @@
       });
       (customFields || []).forEach(cf => {
         if (!cf.enabled) return;
-        bySection.custom.push({ key: cf.key, label: cf.label, type: cf.type, options: cf.options, required: !!cf.required, custom: true });
+        bySection.custom.push({
+          key: cf.key, label: cf.label, type: cf.type, options: cf.options, required: !!cf.required, custom: true,
+          dependsOnKey: cf.dependsOnKey || "", dependsOnValue: cf.dependsOnValue || "",
+        });
       });
 
       let html = "";
@@ -2137,6 +2157,7 @@
           DYNAMIC_FIELD_LABELS[f.key] = f.label;
           DYNAMIC_FIELD_TYPES[f.key] = f.type;
           DYNAMIC_CUSTOM_KEYS[f.key] = f.custom;
+          DYNAMIC_FIELD_DEPENDS[f.key] = f.dependsOnKey ? { key: f.dependsOnKey, value: f.dependsOnValue } : null;
           stepFiveKeys.push(f.key);
 
           validators[f.key] = (v) => {
@@ -2221,14 +2242,73 @@
             });
           } else {
             const input = fieldEl.querySelector("input, textarea");
-            if (input) input.addEventListener("blur", () => { if (validators[f.key]) validateField(f.key); });
-            fieldEl.querySelectorAll(".choice-group input").forEach(r => r.addEventListener("change", () => validateField(f.key)));
+            if (input) {
+              input.addEventListener("blur", () => { if (validators[f.key]) validateField(f.key); });
+              input.addEventListener("input", () => evaluateConditionalFields_());
+            }
+            // Same "light up the picked pill" behavior the 9 built-in fields
+            // get from the page-load-time listener further up — that one
+            // only ever saw the pills that existed in the DOM at load time,
+            // so anything built here at runtime (custom fields, extra
+            // fields) never got highlighted on tap even though the value
+            // WAS being recorded correctly underneath.
+            fieldEl.querySelectorAll(".choice-group input").forEach(r => {
+              r.addEventListener("change", () => {
+                const group = r.closest(".choice-group");
+                group.querySelectorAll(".choice-pill").forEach(p => p.classList.remove("selected"));
+                r.closest(".choice-pill").classList.add("selected");
+                validateField(f.key);
+                evaluateConditionalFields_();
+              });
+            });
           }
         });
       });
 
       const stepFive = { step: 5, titleKey: "step5", keys: stepFiveKeys };
       if (reviewIdx > -1) reviewGroups[reviewIdx] = stepFive; else reviewGroups.push(stepFive);
+
+      evaluateConditionalFields_(); // set correct initial show/hide before the user's even touched anything
+    }
+
+    // Shows/hides every custom field that has a "شرط ظهور" (visibility
+    // condition) set in the dashboard, based on the CURRENT value of the
+    // field it depends on — e.g. a "committee" field that only appears once
+    // "Are you a member?" is answered "Yes". Runs on load, after a draft
+    // restore, and every time any dynamic field changes (since any of them
+    // could be someone else's dependency target).
+    function evaluateConditionalFields_() {
+      let changed = false;
+      Object.keys(DYNAMIC_FIELD_DEPENDS).forEach(key => {
+        const dep = DYNAMIC_FIELD_DEPENDS[key];
+        if (!dep) return;
+        const fieldEl = form.querySelector(`[data-key="${key}"]`);
+        if (!fieldEl) return;
+        const shouldShow = getFieldValue(dep.key) === dep.value;
+        const isCurrentlyHidden = fieldEl.dataset.disabled === "1";
+        if (shouldShow !== isCurrentlyHidden) return; // already in the right state
+        changed = true;
+        fieldEl.style.display = shouldShow ? "" : "none";
+        fieldEl.dataset.disabled = shouldShow ? "0" : "1";
+        if (!shouldShow) {
+          // Clear whatever was picked so a stale answer never lingers into
+          // the submitted data once the field's condition no longer holds
+          // (e.g. someone picks a committee, then changes their mind about
+          // being a member — the old committee pick shouldn't quietly ride
+          // along in the background).
+          const choiceGroup = fieldEl.querySelector(".choice-group");
+          if (choiceGroup) {
+            choiceGroup.querySelectorAll("input:checked").forEach(i => { i.checked = false; });
+            choiceGroup.querySelectorAll(".choice-pill").forEach(p => p.classList.remove("selected"));
+          } else {
+            const input = fieldEl.querySelector("input, textarea");
+            if (input) input.value = "";
+          }
+          clearFieldError(fieldEl);
+          fieldEl.classList.remove("valid");
+        }
+      });
+      if (changed) computeProgress();
     }
 
     function getFieldValue(key) {
@@ -2337,6 +2417,8 @@
       // backend defaults any missing field to "" on its own.
       data.customFields = {};
       Object.keys(DYNAMIC_FIELD_LABELS).forEach(key => {
+        const fieldEl = form.querySelector(`[data-key="${key}"]`);
+        if (fieldEl && fieldEl.dataset.disabled === "1") return; // condition not met right now — nothing to send
         if (DYNAMIC_FIELD_TYPES[key] === "photo") {
           data.photoBase64 = photoBase64Data_ || "";
           return;
@@ -2725,6 +2807,7 @@
 
         document.getElementById("restoreDraftBtn").addEventListener("click", () => {
           Object.keys(draft.data).forEach(k => setFieldValue(k, draft.data[k]));
+          evaluateConditionalFields_();
           currentStep = draft.step && visibleSteps.indexOf(draft.step) > -1 ? draft.step : visibleSteps[0];
           showStep(currentStep);
           refreshNidInfoDisplay();
