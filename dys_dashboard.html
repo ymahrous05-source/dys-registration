@@ -9,8 +9,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
+    rel="preload" as="style"
     href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap"
-    rel="stylesheet">
+    onload="this.onload=null;this.rel='stylesheet'">
+  <noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap">
+  </noscript>
   <style>
     :root {
       --dys-bg-1: #0a2417;
@@ -942,6 +946,29 @@
     .field-config-table input[type="checkbox"] {
       width: 17px;
       height: 17px;
+    }
+
+    .cf-condition-row td {
+      border-bottom: 1px solid #e2e6e3;
+      background: #f7f9f7;
+      padding: 8px 10px;
+    }
+
+    .cf-condition-panel {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: 12.5px;
+    }
+
+    .cf-condition-panel select,
+    .cf-condition-panel input {
+      font-family: inherit;
+      font-size: 12.5px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid #dfe6e0;
     }
 
     .drag-handle {
@@ -2137,9 +2164,15 @@
         row.addEventListener("dragover", (e) => {
           e.preventDefault();
           if (!draggedRow || draggedRow === row || draggedRow.parentElement !== row.parentElement) return;
+          // A draggable row can have a paired non-draggable sub-row right
+          // after it (e.g. a custom field's "شرط ظهور" condition panel) —
+          // keep that pair together instead of leaving the panel behind.
+          const partner = draggedRow.nextElementSibling && !draggedRow.nextElementSibling.classList.contains("draggable-row")
+            ? draggedRow.nextElementSibling : null;
           const rect = row.getBoundingClientRect();
           const before = (e.clientY - rect.top) < rect.height / 2;
           row.parentElement.insertBefore(draggedRow, before ? row : row.nextSibling);
+          if (partner) row.parentElement.insertBefore(partner, draggedRow.nextSibling);
         });
       });
     }
@@ -2168,23 +2201,91 @@
       const body = document.getElementById("customFieldsBody");
       if (!customFields.length) { table.style.display = "none"; body.innerHTML = ""; return; }
       table.style.display = "";
-      body.innerHTML = customFields.map((cf) => `
+
+      // A field can only depend on an already-saved field (real key, not a
+      // "_tmp_..." one that only exists in this unsaved session) — you add
+      // "عضو في الكيان" first, save, THEN add "اللجان" and point it at the
+      // now-real key. Keeps this simple instead of resolving forward refs.
+      const dependableFields = customFields.filter(cf => !cf.key.startsWith("_tmp_"));
+
+      function valueControlHtml_(forCf, currentValue) {
+        const target = dependableFields.find(cf => cf.key === (forCf.dependsOnKey || ""));
+        if (target && target.type === "checkbox") {
+          return `<select class="cf-depends-value">
+            <option value="Yes" ${currentValue === "Yes" ? "selected" : ""}>نعم</option>
+            <option value="No" ${currentValue === "No" ? "selected" : ""}>لا</option>
+          </select>`;
+        }
+        if (target && target.type === "select" && target.options) {
+          return `<select class="cf-depends-value">` +
+            target.options.map(o => `<option value="${o}" ${currentValue === o ? "selected" : ""}>${o}</option>`).join("") +
+            `</select>`;
+        }
+        return `<input type="text" class="cf-depends-value" placeholder="القيمة" value="${currentValue || ""}">`;
+      }
+
+      body.innerHTML = customFields.map((cf) => {
+        const hasCondition = !!cf.dependsOnKey;
+        const dependsOptionsHtml = `<option value="">بدون شرط (يظهر دايمًا)</option>` +
+          dependableFields.filter(f => f.key !== cf.key).map(f =>
+            `<option value="${f.key}" ${cf.dependsOnKey === f.key ? "selected" : ""}>${f.label}</option>`
+          ).join("");
+        return `
         <tr data-key="${cf.key}" draggable="true" class="draggable-row">
           <td class="drag-handle" title="اسحب لإعادة الترتيب">⠿</td>
           <td>${cf.label} <span class="hint">(${CUSTOM_TYPE_LABELS[cf.type] || cf.type})</span></td>
           <td><code style="font-size:11px; opacity:.8;">${cf.key.startsWith("_tmp_") ? "(هيتحدد بعد الحفظ)" : "{{" + cf.key + "}}"}</code></td>
           <td><input type="checkbox" class="cf-enabled" ${cf.enabled ? "checked" : ""}></td>
           <td><input type="checkbox" class="cf-required" ${cf.required ? "checked" : ""}></td>
-          <td><button type="button" class="settings-btn muted remove-custom-field-btn" style="padding:2px 10px; font-size:12px;">حذف</button></td>
+          <td style="white-space:nowrap;">
+            <button type="button" class="settings-btn muted cf-condition-toggle-btn" style="padding:2px 10px; font-size:12px;" title="اظهار الحقل ده بس لو حقل تاني اتجاوب بقيمة معينة">${hasCondition ? "🔀 شرط محدد" : "🔀 شرط"}</button>
+            <button type="button" class="settings-btn muted remove-custom-field-btn" style="padding:2px 10px; font-size:12px;">حذف</button>
+          </td>
         </tr>
-      `).join("");
+        <tr class="cf-condition-row" data-key-for="${cf.key}" style="${hasCondition ? "" : "display:none;"}">
+          <td colspan="6">
+            <div class="cf-condition-panel">
+              <span class="hint">يظهر بس لو</span>
+              <select class="cf-depends-key">${dependsOptionsHtml}</select>
+              <span class="hint">=</span>
+              <span class="cf-depends-value-wrap">${valueControlHtml_(cf, cf.dependsOnValue)}</span>
+            </div>
+          </td>
+        </tr>`;
+      }).join("");
+
       body.querySelectorAll(".remove-custom-field-btn").forEach(btn => {
         btn.addEventListener("click", () => {
           const key = btn.closest("tr").dataset.key;
           latestCustomFields = latestCustomFields.filter(cf => cf.key !== key);
+          // Also clear any OTHER field's dependency that pointed at the one
+          // just removed — otherwise it'd point at nothing and just stay
+          // hidden forever with no visible way to fix it.
+          latestCustomFields.forEach(cf => { if (cf.dependsOnKey === key) { cf.dependsOnKey = ""; cf.dependsOnValue = ""; } });
           renderCustomFieldsTable(latestCustomFields);
         });
       });
+
+      body.querySelectorAll(".cf-condition-toggle-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const key = btn.closest("tr").dataset.key;
+          const row = body.querySelector(`.cf-condition-row[data-key-for="${key}"]`);
+          row.style.display = row.style.display === "none" ? "" : "none";
+        });
+      });
+
+      // Changing WHICH field this depends on changes what kind of value
+      // picker makes sense (Yes/No, its option list, or free text) — rebuild
+      // just that one value control in place.
+      body.querySelectorAll(".cf-depends-key").forEach(sel => {
+        sel.addEventListener("change", () => {
+          const key = sel.closest(".cf-condition-row").dataset.keyFor;
+          const cf = customFields.find(c => c.key === key);
+          const fakeCf = { dependsOnKey: sel.value };
+          sel.closest(".cf-condition-panel").querySelector(".cf-depends-value-wrap").innerHTML = valueControlHtml_(fakeCf, "");
+        });
+      });
+
       enableDragReorder_(body.closest("table"));
     }
 
@@ -2194,12 +2295,16 @@
       // DOM order (post-drag) IS the desired save order — map each row back
       // to its original object by key, not position, since dragging moves
       // rows without touching latestCustomFields until this collect step.
-      return Array.from(document.querySelectorAll("#customFieldsBody tr")).map(tr => {
+      return Array.from(document.querySelectorAll("#customFieldsBody tr.draggable-row")).map(tr => {
         const cf = byKey[tr.dataset.key];
         if (!cf) return null;
+        const conditionRow = document.querySelector(`.cf-condition-row[data-key-for="${tr.dataset.key}"]`);
+        const dependsOnKey = conditionRow ? conditionRow.querySelector(".cf-depends-key").value : "";
         return Object.assign({}, cf, {
           enabled: tr.querySelector(".cf-enabled").checked,
           required: tr.querySelector(".cf-required").checked,
+          dependsOnKey,
+          dependsOnValue: dependsOnKey && conditionRow ? conditionRow.querySelector(".cf-depends-value").value : "",
         });
       }).filter(Boolean);
     }
