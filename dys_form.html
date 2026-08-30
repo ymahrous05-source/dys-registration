@@ -981,6 +981,26 @@
       filter: brightness(1.05);
     }
 
+    /* Post-registration action buttons (server-configured from the dashboard's
+       "🎉 خيارات بعد التسجيل" card — see DYS_SUCCESS_ACTIONS/renderSuccessActionButtons_
+       below). .btn-whatsapp above stays the default/fallback look; these
+       just recolor per action type so the button hints at where it leads. */
+    .btn-whatsapp.sa-telegram {
+      background: #29A9EA;
+    }
+
+    .btn-whatsapp.sa-facebook {
+      background: #1877F2;
+    }
+
+    .btn-whatsapp.sa-instagram {
+      background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
+    }
+
+    .btn-whatsapp.sa-link {
+      background: var(--dys-navy);
+    }
+
     .btn-print {
       background: #eef1ef;
       color: var(--dys-text);
@@ -1456,18 +1476,20 @@
     const CLOUDINARY_UPLOAD_PRESET = "";    // e.g. "dys_unsigned" — Settings ▸ Upload ▸ Upload presets ▸ Add (Signing Mode: Unsigned)
     const CLOUDINARY_MAX_VIDEO_MB = 100;    // client-side size guard, adjust to taste
 
-    // Buttons shown on the success screen after registration.
-    // Each entry is one of:
-    //   { type: "wa_dm",    number: "20...", labelAr, labelEn }  -> opens a WhatsApp DM
-    //                        to that number with a pre-filled "I just registered" message.
-    //                        number = digits only, international format (20 + number
-    //                        without the leading 0).
-    //   { type: "wa_group", url: "https://chat.whatsapp.com/...", labelAr, labelEn }
-    //                        -> opens the WhatsApp group invite link directly (no message).
-    // To hide a button, delete its entry or comment it out — that's it.
-    const DYS_SUCCESS_LINKS = [
-      { type: "wa_group", url: "https://chat.whatsapp.com/FMbxo27tHHx4pDPiGwIBVV?s=cl&p=a&mlu=4", labelAr: "انضم لجروب الواتساب", labelEn: "Join the WhatsApp group" },
+    // Fallback ONLY: used if the backend has no "خيارات بعد التسجيل" configured
+    // yet (or is unreachable when the success screen renders) — see
+    // DYS_SUCCESS_ACTIONS + renderSuccessActionButtons_() below, which is now
+    // the normal, dashboard-driven path (Settings tab ▸ "🎉 خيارات بعد التسجيل").
+    // Committee WhatsApp numbers: digits only, international format (20 + number without the leading 0).
+    const DYS_WHATSAPP_NUMBERS_FALLBACK = [
+      { number: "201557510709", label: "تواصل مع تيم الـ HR" },
+      { number: "201277749241", label: "تواصل مع تيم الـ HR (رقم تاني)" },
     ];
+
+    // Populated from ?action=publicConfig (see loadRegistrationConfig below).
+    // Each entry: {id, type, label, value, enabled} — type is one of
+    // "whatsapp_chat" | "whatsapp_group" | "telegram" | "facebook" | "instagram" | "link".
+    let DYS_SUCCESS_ACTIONS = null; // null = "not loaded yet / backend unreachable", not "empty on purpose"
 
     // ==================== i18n ====================
     const I18N = {
@@ -1692,6 +1714,9 @@
           if (res.fieldConfig) applyFieldConfig_(res.fieldConfig);
           buildDynamicFieldsStep_(res.fieldConfig || {}, res.fieldDefs || {}, res.fieldSections || {}, res.customFields || []);
           updateVisibleSteps_();
+          // Only enabled entries ever come back from publicConfig (server-side
+          // filter), so this is already exactly what should render.
+          DYS_SUCCESS_ACTIONS = Array.isArray(res.successActions) ? res.successActions : [];
         })
         .catch(() => { /* backend unreachable — fall back to "always open", exactly like before */ });
     }
@@ -2533,6 +2558,60 @@
       submitForm();
     });
 
+    // Builds the row of buttons shown right after a successful submission
+    // (HR WhatsApp, group links, socials, ...), fully driven by whatever the
+    // dashboard's "🎉 خيارات بعد التسجيل" card has enabled — see
+    // loadRegistrationConfig() above, which fills DYS_SUCCESS_ACTIONS from
+    // ?action=publicConfig. Falls back to DYS_WHATSAPP_NUMBERS_FALLBACK only
+    // if the backend never returned a config at all (offline/unreachable) —
+    // once the backend responds even with an empty list, that's respected as
+    // "admin turned everything off on purpose" and nothing is shown.
+    function renderSuccessActionButtons_(payload, res) {
+      const name = payload.name || "";
+      const memberNo = res.membershipNo || "";
+      const waMsg = encodeURIComponent(`السلام عليكم، أنا ${name}، رقم عضويتي ${memberNo}، سجّلت في استمارة سند شباب الدلتا.`);
+      const waContainer = document.getElementById("whatsappButtons");
+      waContainer.innerHTML = "";
+
+      const actions = DYS_SUCCESS_ACTIONS !== null
+        ? DYS_SUCCESS_ACTIONS
+        : DYS_WHATSAPP_NUMBERS_FALLBACK.map(entry => ({ type: "whatsapp_chat", label: entry.label, value: entry.number, enabled: true }));
+
+      actions.forEach(entry => {
+        if (!entry || !entry.value) return;
+        const a = document.createElement("a");
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.textContent = entry.label || "تواصل معانا";
+        switch (entry.type) {
+          case "whatsapp_chat":
+            a.href = `https://wa.me/${entry.value}?text=${waMsg}`;
+            a.className = "btn-whatsapp";
+            break;
+          case "whatsapp_group":
+            a.href = entry.value;
+            a.className = "btn-whatsapp";
+            break;
+          case "telegram":
+            a.href = entry.value;
+            a.className = "btn-whatsapp sa-telegram";
+            break;
+          case "facebook":
+            a.href = entry.value;
+            a.className = "btn-whatsapp sa-facebook";
+            break;
+          case "instagram":
+            a.href = entry.value;
+            a.className = "btn-whatsapp sa-instagram";
+            break;
+          default: // "link" and anything unrecognized
+            a.href = entry.value;
+            a.className = "btn-whatsapp sa-link";
+        }
+        waContainer.appendChild(a);
+      });
+    }
+
     // ==================== Submit ====================
     function showSuccessScreen(payload, res) {
       document.getElementById("formArea").style.display = "none";
@@ -2548,27 +2627,7 @@
         renderMemberQr(`DYS|${res.membershipNo}|${payload.name || ""}`);
       }
 
-      const name = payload.name || "";
-      const memberNo = res.membershipNo || "";
-      const waMsg = encodeURIComponent(`السلام عليكم، أنا ${name}، رقم عضويتي ${memberNo}، سجّلت في استمارة سند شباب الدلتا.`);
-      const waContainer = document.getElementById("whatsappButtons");
-      waContainer.innerHTML = "";
-      DYS_SUCCESS_LINKS.forEach(entry => {
-        const label = (currentLang === "en" ? entry.labelEn : entry.labelAr) || entry.labelAr || entry.labelEn;
-        const a = document.createElement("a");
-        a.className = "btn-whatsapp";
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.textContent = label || "تواصل معانا على واتساب";
-        if (entry.type === "wa_group") {
-          if (!entry.url) return;
-          a.href = entry.url;
-        } else {
-          if (!entry.number) return;
-          a.href = `https://wa.me/${entry.number}?text=${waMsg}`;
-        }
-        waContainer.appendChild(a);
-      });
+      renderSuccessActionButtons_(payload, res);
 
       const emailNote = document.getElementById("emailNote");
       if (payload.email) {
@@ -2576,8 +2635,8 @@
         emailNote.style.display = "block";
       }
 
-      document.getElementById("prName").textContent = name;
-      document.getElementById("prMemberNo").textContent = memberNo || "-";
+      document.getElementById("prName").textContent = payload.name || "";
+      document.getElementById("prMemberNo").textContent = res.membershipNo || "-";
       document.getElementById("prNid").textContent = payload.nationalId || "-";
       document.getElementById("prCommittee").textContent = payload.committee || "-";
       document.getElementById("prDate").textContent = new Date().toLocaleDateString("ar-EG");
