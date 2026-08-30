@@ -8,12 +8,12 @@
   <meta name="theme-color" content="#0a2417">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link
-    rel="preload" as="style"
+  <link rel="preload" as="style"
     href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap"
     onload="this.onload=null;this.rel='stylesheet'">
   <noscript>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap">
+    <link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap">
   </noscript>
   <style>
     :root {
@@ -307,7 +307,9 @@
       border: 1px solid rgba(192, 57, 43, .35);
     }
 
-    .stat-card-warn .num { color: #c0392b; }
+    .stat-card-warn .num {
+      color: #c0392b;
+    }
 
     tr.dup-row td:first-child {
       box-shadow: inset 3px 0 0 #c0392b;
@@ -322,7 +324,10 @@
       cursor: pointer;
       user-select: none;
     }
-    .dup-only-toggle input { cursor: pointer; }
+
+    .dup-only-toggle input {
+      cursor: pointer;
+    }
 
     .stat-card .num {
       font-size: 25px;
@@ -1135,8 +1140,12 @@
             <button type="button" id="printBtn">🖨️ طباعة</button>
             <button type="button" id="exportBtn">⬇ تصدير CSV سريع</button>
             <button type="button" id="exportExcelBtn">📊 تصدير Excel منسّق (.xlsx)</button>
-            <button type="button" id="copyPhonesBtn" title="بينسخ أرقام الموبايل بتاعة الصفوف الظاهرة حاليًا بعد الفلاتر، سطر تحت التاني — جاهزة تلصقها في قايمة واتساب">📋 نسخ أرقام الموبايل</button>
-            <button type="button" id="copyEmailsBtn" title="بينسخ الإيميلات بتاعة الصفوف الظاهرة حاليًا بعد الفلاتر، مفصولة بفاصلة — جاهزة تلصقها في خانة CC/BCC">✉️ نسخ الإيميلات</button>
+            <button type="button" id="copyPhonesBtn"
+              title="بينسخ أرقام الموبايل بتاعة الصفوف الظاهرة حاليًا بعد الفلاتر، سطر تحت التاني — جاهزة تلصقها في قايمة واتساب">📋
+              نسخ أرقام الموبايل</button>
+            <button type="button" id="copyEmailsBtn"
+              title="بينسخ الإيميلات بتاعة الصفوف الظاهرة حاليًا بعد الفلاتر، مفصولة بفاصلة — جاهزة تلصقها في خانة CC/BCC">✉️
+              نسخ الإيميلات</button>
             <label class="dup-only-toggle" title="يفلتر الجدول عشان يوريك بس الصفوف اللي رقم موبايلها مكرر في صف تاني">
               <input type="checkbox" id="dupOnlyToggle"> ⚠️ عرض المكررين بس
             </label>
@@ -1303,6 +1312,51 @@
           </div>
 
           <div class="settings-card">
+            <h3>🎉 خيارات بعد التسجيل</h3>
+            <p class="hint">الأزرار اللي بتظهر للعضو فور ما يخلّص تسجيل (بعد شاشة "تم التسجيل بنجاح" مباشرة) — زي
+              "تواصل مع الـ HR" على واتساب أو "انضم لجروب الواتساب" أو أي لينك تاني. ضيف كل الاحتمالات اللي محتاجها
+              مرة واحدة، وبعدين استخدم عمود "ظاهر" تحت عشان تشغّل/تقفل أي واحد فيهم وقت ما تحب من غير ما تعدّل أي
+              حاجة تانية — اللي مقفول (❌) مش هيظهر للأعضاء خالص.</p>
+            <table class="field-config-table" id="successActionsTable" style="display:none;">
+              <thead>
+                <tr>
+                  <th>النوع</th>
+                  <th>النص على الزرار</th>
+                  <th>الرقم / اللينك</th>
+                  <th>ظاهر</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="successActionsBody"></tbody>
+            </table>
+            <div class="settings-field" style="margin-top:10px;">
+              <div class="cycle-row" style="flex-wrap:wrap;">
+                <select id="newSuccessActionType">
+                  <option value="whatsapp_chat">واتساب — تواصل مباشر (مثلاً مع الـ HR)</option>
+                  <option value="whatsapp_group">واتساب — انضمام لجروب</option>
+                  <option value="telegram">تليجرام</option>
+                  <option value="facebook">فيسبوك</option>
+                  <option value="instagram">إنستجرام</option>
+                  <option value="link">لينك عام (أي حاجة تانية)</option>
+                </select>
+                <input type="text" id="newSuccessActionLabel" placeholder="النص على الزرار (مثلاً: تواصل مع تيم الـ HR)">
+              </div>
+              <input type="text" id="newSuccessActionValue" style="margin-top:8px;"
+                placeholder="رقم واتساب بالصيغة الدولية بدون + أو 00 (مثلاً 201xxxxxxxxx)">
+              <p class="hint" id="newSuccessActionHint" style="margin-top:4px;">لنوع "واتساب — تواصل مباشر" حط رقم
+                الواتساب بس (بدون + أو 00 وبدون مسافات)، مثلاً <code>201557510709</code> — هيتفتح تلقائي برسالة فيها
+                اسم العضو ورقم عضويته.</p>
+              <div class="settings-actions" style="margin-top:8px;">
+                <button type="button" class="settings-btn primary" id="addSuccessActionBtn">إضافة الزرار</button>
+              </div>
+            </div>
+            <div class="settings-actions" style="margin-top:16px;">
+              <button type="button" class="settings-btn primary" id="saveSuccessActionsBtn">حفظ خيارات بعد التسجيل</button>
+            </div>
+            <div class="settings-note" id="successActionsNote"></div>
+          </div>
+
+          <div class="settings-card">
             <h3>🧩 حقول الاستمارة</h3>
             <p class="hint">تحكم في أي حقول تظهر في استمارة التسجيل، وأي حقول منهم إجباري وأي حقول اختياري. حقلي "الاسم"
               و"الرقم القومي" مش موجودين هنا لأنهم أساسيين للنظام (منع التكرار ورقم العضوية بيعتمدوا عليهم) وهيفضلوا
@@ -1314,7 +1368,15 @@
             <p class="hint">مش لاقي الحقل اللي محتاجه في القوائم فوق؟ ضيفه بنفسك هنا — أي اسم وأي نوع، وهيظهر في
               الاستمارة زي أي حقل تاني. تقدر تستخدمه بعدين في الشهادة بالكود اللي هيتعرض جنبه بعد ما تضيفه.</p>
             <table class="field-config-table" id="customFieldsTable" style="display:none;">
-              <thead><tr><th>الاسم</th><th>الكود (للشهادة)</th><th>ظاهر</th><th>إجباري</th><th></th></tr></thead>
+              <thead>
+                <tr>
+                  <th>الاسم</th>
+                  <th>الكود (للشهادة)</th>
+                  <th>ظاهر</th>
+                  <th>إجباري</th>
+                  <th></th>
+                </tr>
+              </thead>
               <tbody id="customFieldsBody"></tbody>
             </table>
             <div class="settings-field" style="margin-top:10px;">
@@ -1329,7 +1391,9 @@
                   <option value="checkbox">نعم / لا</option>
                 </select>
               </div>
-              <input type="text" id="newCustomFieldOptions" placeholder="خيارات القائمة مفصولة بفاصلة (بس لو النوع «قائمة اختيار»)" style="display:none; margin-top:8px;">
+              <input type="text" id="newCustomFieldOptions"
+                placeholder="خيارات القائمة مفصولة بفاصلة (بس لو النوع «قائمة اختيار»)"
+                style="display:none; margin-top:8px;">
               <div class="settings-actions" style="margin-top:8px;">
                 <button type="button" class="settings-btn primary" id="addCustomFieldBtn">إضافة الحقل</button>
               </div>
@@ -1359,7 +1423,8 @@
               <b>إعدادات عامة</b> (العنوان، الميعاد، الشعار، الدورات، التشخيص)،
               <b>حقول الاستمارة</b>، <b>الشهادات</b> (رفع تيمبلت وإرسال)،
               و<b>إدارة الحسابات</b> (دي الأخطر — بتسمح للحساب إنه يضيف/يمسح حسابات تانية، فاديها لمين تديها).
-              حساب من غير أي صلاحية من دول = عرض بس (زي viewer القديم). حساب معاه الأربعة = كل الصلاحيات (زي owner القديم).
+              حساب من غير أي صلاحية من دول = عرض بس (زي viewer القديم). حساب معاه الأربعة = كل الصلاحيات (زي owner
+              القديم).
             </p>
             <table class="field-config-table" id="accountsTable">
               <thead>
@@ -1396,10 +1461,17 @@
 
           <div class="settings-card">
             <h3>📜 سجل النشاط</h3>
-            <p class="hint">آخر 500 حركة اتعملت من أي حساب في لوحة التحكم — مين عمل إيه وإمتى. للمراجعة بس، مش قابل للتعديل.</p>
+            <p class="hint">آخر 500 حركة اتعملت من أي حساب في لوحة التحكم — مين عمل إيه وإمتى. للمراجعة بس، مش قابل
+              للتعديل.</p>
             <button type="button" class="settings-btn" id="loadActivityLogBtn">تحميل السجل</button>
             <table class="field-config-table" id="activityLogTable" style="display:none; margin-top:12px;">
-              <thead><tr><th>الوقت</th><th>الحساب</th><th>الحركة</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>الوقت</th>
+                  <th>الحساب</th>
+                  <th>الحركة</th>
+                </tr>
+              </thead>
               <tbody id="activityLogBody"></tbody>
             </table>
             <div class="settings-note" id="activityLogNote"></div>
@@ -1533,6 +1605,7 @@
       { selector: "#saveConfigBtn", permission: "manageSettings" },     // عنوان الاستمارة واسم الشيت + دورة تسجيل جديدة
       { selector: "#uploadLogoBtn", permission: "manageSettings" },     // صورة الاستمارة
       { selector: "#runDiagnosticsBtn", permission: "manageSettings" }, // تشخيص
+      { selector: "#saveSuccessActionsBtn", permission: "manageSettings" }, // خيارات بعد التسجيل
       { selector: "#uploadCertBtn", permission: "manageCertificates" }, // شهادات الأعضاء
       { selector: "#saveFieldConfigBtn", permission: "manageFields" },  // حقول الاستمارة
       { selector: "#addAccountBtn", permission: "manageAccounts" },     // حسابات الدخول
@@ -2086,6 +2159,7 @@
 
           renderFieldConfigTable(cfg.fieldConfig || {}, cfg.fieldDefs || {}, cfg.fieldSections || {});
           renderCustomFieldsTable(cfg.customFields || []);
+          renderSuccessActionsTable(cfg.successActions || []);
         })
         .catch(() => setNote("configNote", "تعذر تحميل الإعدادات الحالية", "err"));
     }
@@ -2192,6 +2266,19 @@
 
     // ---- Custom fields (admin-defined, unlimited) ----
     let latestCustomFields = [];
+    let latestSuccessActions = [];
+    const SUCCESS_ACTION_TYPE_LABELS = {
+      whatsapp_chat: "واتساب (تواصل مباشر)", whatsapp_group: "واتساب (جروب)",
+      telegram: "تليجرام", facebook: "فيسبوك", instagram: "إنستجرام", link: "لينك عام",
+    };
+    const SUCCESS_ACTION_VALUE_HINTS = {
+      whatsapp_chat: { placeholder: "رقم واتساب بالصيغة الدولية بدون + أو 00 (مثلاً 201xxxxxxxxx)", hint: `لنوع "واتساب — تواصل مباشر" حط رقم الواتساب بس (بدون + أو 00 وبدون مسافات)، مثلاً <code>201557510709</code> — هيتفتح تلقائي برسالة فيها اسم العضو ورقم عضويته.` },
+      whatsapp_group: { placeholder: "لينك جروب/كوميونيتي الواتساب (chat.whatsapp.com/... أو whatsapp.com/channel/...)", hint: "الصق لينك دعوة الجروب زي ما هو من واتساب." },
+      telegram: { placeholder: "لينك التليجرام (t.me/...)", hint: "الصق لينك القروب/القناة على تليجرام." },
+      facebook: { placeholder: "لينك صفحة/جروب الفيسبوك", hint: "الصق لينك الصفحة أو الجروب على فيسبوك." },
+      instagram: { placeholder: "لينك حساب الإنستجرام", hint: "الصق لينك البروفايل على إنستجرام." },
+      link: { placeholder: "أي لينك (https://...)", hint: "أي لينك تاني عايز تظهره كزرار — درايف، فورم، موقع، إلخ." },
+    };
 
     const CUSTOM_TYPE_LABELS = { text: "نص قصير", textarea: "نص طويل", number: "رقم", date: "تاريخ", select: "قائمة اختيار", checkbox: "نعم / لا" };
 
@@ -2346,6 +2433,79 @@
         .finally(() => { btn.disabled = false; });
     });
 
+    // ---- Post-registration success-screen buttons ----
+    function renderSuccessActionsTable(actions) {
+      latestSuccessActions = actions;
+      const table = document.getElementById("successActionsTable");
+      const body = document.getElementById("successActionsBody");
+      if (!actions.length) { table.style.display = "none"; body.innerHTML = ""; return; }
+      table.style.display = "";
+
+      body.innerHTML = actions.map((a) => `
+        <tr data-id="${a.id}">
+          <td>${SUCCESS_ACTION_TYPE_LABELS[a.type] || a.type}</td>
+          <td><input type="text" class="sa-label" value="${(a.label || "").replace(/"/g, "&quot;")}"></td>
+          <td><input type="text" class="sa-value" value="${(a.value || "").replace(/"/g, "&quot;")}"></td>
+          <td><input type="checkbox" class="sa-enabled" ${a.enabled !== false ? "checked" : ""}></td>
+          <td><button type="button" class="settings-btn muted remove-success-action-btn" style="padding:2px 10px; font-size:12px;">حذف</button></td>
+        </tr>`).join("");
+
+      body.querySelectorAll(".remove-success-action-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const id = btn.closest("tr").dataset.id;
+          latestSuccessActions = latestSuccessActions.filter(a => a.id !== id);
+          renderSuccessActionsTable(latestSuccessActions);
+        });
+      });
+    }
+
+    function collectSuccessActionsFromUI() {
+      const byId = {};
+      latestSuccessActions.forEach(a => { byId[a.id] = a; });
+      return Array.from(document.querySelectorAll("#successActionsBody tr")).map(tr => {
+        const a = byId[tr.dataset.id];
+        if (!a) return null;
+        return Object.assign({}, a, {
+          label: tr.querySelector(".sa-label").value.trim(),
+          value: tr.querySelector(".sa-value").value.trim(),
+          enabled: tr.querySelector(".sa-enabled").checked,
+        });
+      }).filter(a => a && a.label && a.value);
+    }
+
+    document.getElementById("newSuccessActionType").addEventListener("change", (e) => {
+      const info = SUCCESS_ACTION_VALUE_HINTS[e.target.value] || SUCCESS_ACTION_VALUE_HINTS.link;
+      document.getElementById("newSuccessActionValue").placeholder = info.placeholder;
+      document.getElementById("newSuccessActionHint").innerHTML = info.hint;
+    });
+
+    document.getElementById("addSuccessActionBtn").addEventListener("click", () => {
+      const type = document.getElementById("newSuccessActionType").value;
+      const label = document.getElementById("newSuccessActionLabel").value.trim();
+      const value = document.getElementById("newSuccessActionValue").value.trim();
+      if (!label || !value) { setNote("successActionsNote", "لازم تكتب النص والرقم/اللينك الأول.", "err"); return; }
+      latestSuccessActions.push({ id: "_tmp_" + Date.now() + "_" + Math.random().toString(36).slice(2), type, label, value, enabled: true });
+      renderSuccessActionsTable(latestSuccessActions);
+      document.getElementById("newSuccessActionLabel").value = "";
+      document.getElementById("newSuccessActionValue").value = "";
+      setNote("successActionsNote", `زرار "${label}" اتضاف — دوس "حفظ خيارات بعد التسجيل" تحت عشان يتأكد.`, "ok");
+    });
+
+    document.getElementById("saveSuccessActionsBtn").addEventListener("click", () => {
+      const btn = document.getElementById("saveSuccessActionsBtn");
+      btn.disabled = true;
+      setNote("successActionsNote", "جاري الحفظ...");
+      postAdmin(Object.assign(collectConfigPayload(), { startNewCycle: false, successActions: collectSuccessActionsFromUI() }))
+        .then(res => {
+          if (res.status !== "success") throw new Error(res.message || "error");
+          setNote("successActionsNote", "اتحفظت خيارات بعد التسجيل ✓ — سرت مباشرة على استمارة التسجيل", "ok");
+          toast("اتحفظت خيارات بعد التسجيل ✓");
+          loadConfigForm();
+        })
+        .catch(err => setNote("successActionsNote", "حصل خطأ: " + err.message, "err"))
+        .finally(() => { btn.disabled = false; });
+    });
+
     document.getElementById("runDiagnosticsBtn").addEventListener("click", () => {
       const btn = document.getElementById("runDiagnosticsBtn");
       const out = document.getElementById("diagnosticsOutput");
@@ -2458,6 +2618,10 @@
         startAt: startVal ? new Date(startVal).toISOString() : "",
         endAt: endVal ? new Date(endVal).toISOString() : "",
         sendCertAuto: document.getElementById("cfgSendCertAuto").checked,
+        // Always sent (even from the other save buttons on this tab) so this
+        // list never gets silently overwritten by an unrelated save — it just
+        // reflects whatever's currently in the table.
+        successActions: collectSuccessActionsFromUI(),
       };
     }
 
