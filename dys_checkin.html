@@ -30,7 +30,7 @@
 
     * { box-sizing: border-box; }
 
-    html, body { margin: 0; padding: 0; }
+    html, body { margin: 0; padding: 0; overflow-x: hidden; }
 
     body {
       font-family: 'Cairo', sans-serif;
@@ -277,6 +277,11 @@
     // deploy, just point this at the same Apps Script Web App URL.
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyQoy8ILXBbXduBU72ZSkjnSmGqEFbUwkEnLvBDgNC1lRnRnaAxu8p0YRKareIz22wN/exec";
     const PWD_KEY = "dys_checkin_password";
+    // Optional ?form=xxx — restricts scans to that specific form's
+    // registrants (e.g. dys_checkin.html?form=f_a1b2c3d4 for an event's own
+    // door). Missing/empty = search across every form's data, same as
+    // before multi-form support existed.
+    const DYS_FORM_ID = new URLSearchParams(window.location.search).get("form") || "";
 
     const loginScreen = document.getElementById("loginScreen");
     const scanScreen = document.getElementById("scanScreen");
@@ -437,11 +442,11 @@
       const action = verifyOnly ? "verifyMember" : "checkin";
 
       const request = verifyOnly
-        ? fetch(`${SCRIPT_URL}?action=verifyMember&password=${encodeURIComponent(password)}&code=${encodeURIComponent(rawCode)}`, { cache: "no-store" }).then(r => r.json())
+        ? fetch(`${SCRIPT_URL}?action=verifyMember&password=${encodeURIComponent(password)}&code=${encodeURIComponent(rawCode)}&form=${encodeURIComponent(DYS_FORM_ID)}`, { cache: "no-store" }).then(r => r.json())
         : fetch(SCRIPT_URL, {
             method: "POST",
             headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids a CORS preflight, same trick the registration form uses
-            body: JSON.stringify({ action: "checkin", password, code: rawCode }),
+            body: JSON.stringify({ action: "checkin", password, code: rawCode, formId: DYS_FORM_ID }),
           }).then(r => r.json());
 
       request.then(res => {
