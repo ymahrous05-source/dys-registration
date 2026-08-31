@@ -55,6 +55,13 @@
     body {
       margin: 0;
       padding: 0;
+      /* Defensive: the registration form had a bug where an off-screen
+         hidden element blew out the page's horizontal scroll area on
+         mobile — this stops that class of bug from ever affecting the
+         dashboard, regardless of what any element inside does. Scoped
+         scrollers like the data table (overflow-x: auto below) are
+         unaffected — this only blocks scrolling the whole PAGE sideways. */
+      overflow-x: hidden;
     }
 
     body {
@@ -1099,6 +1106,26 @@
         </span>
       </div>
 
+      <!-- Form/tenant switcher — lets one login manage several independent
+           registration forms running at the same time, each with its own
+           link/settings/sheets (see propKey_() in Code.gs). -->
+      <div class="session-bar no-print" id="formSwitcherBar" style="gap:10px; flex-wrap:wrap;">
+        <span style="display:flex; align-items:center; gap:8px;">
+          <label for="formSwitcher" style="font-weight:700;">📋 الفورم:</label>
+          <select id="formSwitcher" style="min-width:200px;"></select>
+          <label style="display:flex; align-items:center; gap:4px; font-size:13px; font-weight:400;">
+            <input type="checkbox" id="showArchivedFormsToggle"> اعرض المؤرشف
+          </label>
+        </span>
+        <span style="display:flex; align-items:center; gap:8px;">
+          <button type="button" class="settings-btn" id="addFormBtn">➕ فورم جديد</button>
+          <button type="button" class="settings-btn" id="renameFormBtn">✏️ تغيير الاسم</button>
+          <button type="button" class="settings-btn" id="copyFormLinkBtn">🔗 نسخ لينك الفورم</button>
+          <button type="button" class="settings-btn" id="showFormQrBtn">📱 QR الفورم</button>
+          <button type="button" class="settings-btn" id="archiveFormBtn">🗄️ أرشفة الفورم</button>
+        </span>
+      </div>
+
       <div class="error-state" id="dashError" style="display:none;"></div>
 
       <div class="stats-row" id="statsRow"></div>
@@ -1218,6 +1245,12 @@
               <label for="cfgSheetBaseName">اسم الشيت الأساسي</label>
               <input type="text" id="cfgSheetBaseName" placeholder="مثال: Registrations">
             </div>
+            <div class="settings-field">
+              <label for="cfgMembershipPrefix">بادئة رقم العضوية (حروف/أرقام إنجليزي، من 2 لـ 8)</label>
+              <input type="text" id="cfgMembershipPrefix" placeholder="مثال: DYS" maxlength="8" style="text-transform:uppercase;">
+              <p class="hint">رقم العضوية هيبقى شكله "البادئة-000123". كل بادئة ليها ترقيمها الخاص، فمينفعش فورمين
+                يستخدموا نفس البادئة من غير ما يتشاركوا في نفس التسلسل.</p>
+            </div>
             <div class="settings-row2">
               <div class="settings-field">
                 <label for="cfgStartAt">بداية التسجيل (سيب فاضي = بدون حد)</label>
@@ -1227,6 +1260,14 @@
                 <label for="cfgEndAt">نهاية التسجيل (سيب فاضي = بدون حد)</label>
                 <input type="datetime-local" id="cfgEndAt">
               </div>
+            </div>
+            <div class="settings-field">
+              <label for="cfgConfirmEmailSubject">عنوان إيميل التأكيد (سيب فاضي = النص الافتراضي)</label>
+              <input type="text" id="cfgConfirmEmailSubject" placeholder="مثال: تأكيد التسجيل — تسجيل حدث كذا">
+            </div>
+            <div class="settings-field">
+              <label for="cfgConfirmEmailBody">نص إيميل التأكيد (سيب فاضي = النص الافتراضي)</label>
+              <textarea id="cfgConfirmEmailBody" rows="5" placeholder="استخدم {{name}} للاسم و{{membershipNo}} لرقم العضوية"></textarea>
             </div>
             <div class="settings-actions">
               <button type="button" class="settings-btn primary" id="saveConfigBtn">حفظ الإعدادات</button>
@@ -1492,7 +1533,7 @@
 
   <div class="toast no-print" id="toast"></div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <script>
     // ==================== CONFIG (kept identical to the working backend) ====================
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyQoy8ILXBbXduBU72ZSkjnSmGqEFbUwkEnLvBDgNC1lRnRnaAxu8p0YRKareIz22wN/exec";
@@ -1503,6 +1544,11 @@
     let allHeaders = [];
     let allRows = [];
     let currentPassword = "";
+    // Which form/tenant the dashboard is currently pointed at ("" = the
+    // original/default form — see propKey_() in Code.gs). Switched via the
+    // "أي فورم" selector — see loadFormsList()/switchForm_() below.
+    let currentFormId = "";
+    let allForms = [{ id: "", name: "الفورم الأساسي", isDefault: true }];
     let currentRole = "owner"; // display-only label ("owner"/"viewer"/"custom") — set from the login response, see fetchData()
     // Granular capabilities for the logged-in account — set from the login response, see fetchData().
     // Keys match PERMISSION_KEYS in Code.gs. Every logged-in account can view data; these four are extra.
@@ -1569,12 +1615,18 @@
     let currentSheetName = ""; // "" = whichever sheet is the ACTIVE cycle right now
     let activeSheetNameFromServer = "";
 
+    // Appended to every GET/POST call so the backend knows which form/tenant
+    // this request is about — see propKey_() in Code.gs.
+    function formQS() {
+      return `&form=${encodeURIComponent(currentFormId)}`;
+    }
+
     function fetchData(password, sheetName) {
       loadingState.style.display = "block";
       emptyState.style.display = "none";
       dashError.style.display = "none";
       renderSkeleton();
-      let url = `${SCRIPT_URL}?action=list&password=${encodeURIComponent(password)}`;
+      let url = `${SCRIPT_URL}?action=list&password=${encodeURIComponent(password)}${formQS()}`;
       if (sheetName) url += `&sheet=${encodeURIComponent(sheetName)}`;
       url += `&_=${Date.now()}`;
       return fetch(url, { cache: "no-store" })
@@ -1606,6 +1658,9 @@
       { selector: "#uploadLogoBtn", permission: "manageSettings" },     // صورة الاستمارة
       { selector: "#runDiagnosticsBtn", permission: "manageSettings" }, // تشخيص
       { selector: "#saveSuccessActionsBtn", permission: "manageSettings" }, // خيارات بعد التسجيل
+      { selector: "#addFormBtn", permission: "manageSettings" },     // فورم جديد
+      { selector: "#renameFormBtn", permission: "manageSettings" }, // تغيير اسم الفورم
+      { selector: "#archiveFormBtn", permission: "manageSettings" }, // أرشفة الفورم
       { selector: "#uploadCertBtn", permission: "manageCertificates" }, // شهادات الأعضاء
       { selector: "#saveFieldConfigBtn", permission: "manageFields" },  // حقول الاستمارة
       { selector: "#addAccountBtn", permission: "manageAccounts" },     // حسابات الدخول
@@ -1662,6 +1717,7 @@
           populateFilters();
           renderAll();
           startInactivityWatch();
+          loadFormsList(currentFormId);
         })
         .catch(() => {
           loginErr.classList.add("show");
@@ -1691,6 +1747,7 @@
     function doLogout(reason) {
       currentPassword = "";
       currentSheetName = "";
+      currentFormId = "";
       settingsLoadedOnce = false;
       try { sessionStorage.removeItem("dys_dash_pwd"); } catch (e) { }
       dashboard.classList.remove("show");
@@ -2087,7 +2144,7 @@
         method: "POST",
         cache: "no-store",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(Object.assign({ password: currentPassword }, bodyObj)),
+        body: JSON.stringify(Object.assign({ password: currentPassword, formId: currentFormId }, bodyObj)),
       }).then(r => r.json());
     }
 
@@ -2113,7 +2170,7 @@
     function loadCycles() {
       const select = document.getElementById("cycleSelect");
       select.innerHTML = `<option value="">جاري التحميل...</option>`;
-      fetch(`${SCRIPT_URL}?action=listCycles&password=${encodeURIComponent(currentPassword)}&_=${Date.now()}`, { cache: "no-store" })
+      fetch(`${SCRIPT_URL}?action=listCycles&password=${encodeURIComponent(currentPassword)}${formQS()}&_=${Date.now()}`, { cache: "no-store" })
         .then(r => r.json())
         .then(res => {
           if (res.status !== "success") throw new Error(res.message || "error");
@@ -2140,15 +2197,18 @@
     });
 
     function loadConfigForm() {
-      fetch(`${SCRIPT_URL}?action=getConfig&password=${encodeURIComponent(currentPassword)}&_=${Date.now()}`, { cache: "no-store" })
+      fetch(`${SCRIPT_URL}?action=getConfig&password=${encodeURIComponent(currentPassword)}${formQS()}&_=${Date.now()}`, { cache: "no-store" })
         .then(r => r.json())
         .then(res => {
           if (res.status !== "success") throw new Error(res.message || "error");
           const cfg = res.config;
           document.getElementById("cfgFormTitle").value = cfg.formTitle || "";
           document.getElementById("cfgSheetBaseName").value = cfg.sheetBaseName || "";
+          document.getElementById("cfgMembershipPrefix").value = cfg.membershipPrefix || "";
           document.getElementById("cfgStartAt").value = isoToLocalInputValue(cfg.startAt);
           document.getElementById("cfgEndAt").value = isoToLocalInputValue(cfg.endAt);
+          document.getElementById("cfgConfirmEmailSubject").value = cfg.confirmEmailSubject || "";
+          document.getElementById("cfgConfirmEmailBody").value = cfg.confirmEmailBody || "";
           const preview = document.getElementById("logoPreview");
           preview.src = cfg.logoUrl || "icon.svg";
 
@@ -2163,6 +2223,124 @@
         })
         .catch(() => setNote("configNote", "تعذر تحميل الإعدادات الحالية", "err"));
     }
+
+    // ==================== Form/tenant switcher ====================
+    // Populates #formSwitcher with every form this login can see (the
+    // default form + anything created via "➕ فورم جديد" — see
+    // handleListForms_/handleAddForm_ in Code.gs), and reloads EVERYTHING
+    // (table data, cycles list, settings tab) whenever the selection changes.
+    function loadFormsList(selectId) {
+      const select = document.getElementById("formSwitcher");
+      const includeArchived = document.getElementById("showArchivedFormsToggle").checked ? "1" : "0";
+      return fetch(`${SCRIPT_URL}?action=listForms&password=${encodeURIComponent(currentPassword)}&includeArchived=${includeArchived}&_=${Date.now()}`, { cache: "no-store" })
+        .then(r => r.json())
+        .then(res => {
+          if (res.status !== "success") throw new Error(res.message || "error");
+          allForms = res.forms && res.forms.length ? res.forms : allForms;
+          select.innerHTML = "";
+          allForms.forEach(f => {
+            const opt = document.createElement("option");
+            opt.value = f.id;
+            opt.textContent = f.isDefault ? `${f.name} (الأساسي)` : (f.archived ? `${f.name} (مؤرشف)` : f.name);
+            select.appendChild(opt);
+          });
+          const wanted = typeof selectId === "string" ? selectId : currentFormId;
+          select.value = allForms.some(f => f.id === wanted) ? wanted : "";
+          currentFormId = select.value;
+        })
+        .catch(() => { /* not fatal — the dashboard still works on the default form */ });
+    }
+
+    document.getElementById("showArchivedFormsToggle").addEventListener("change", () => loadFormsList(currentFormId));
+
+    // Switches which form the WHOLE dashboard is looking at, then reloads
+    // the table + cycles + settings for it (mirrors what happens right
+    // after login, just re-triggered on demand).
+    function switchForm_(formId) {
+      currentFormId = formId;
+      currentSheetName = ""; // "" = that form's own currently-active cycle
+      fetchData(currentPassword, "")
+        .then(() => { populateFilters(); renderAll(); })
+        .catch(() => toast("تعذر تحميل بيانات الفورم ده"));
+      loadCycles();
+      if (settingsLoadedOnce) loadConfigForm();
+    }
+
+    document.getElementById("formSwitcher").addEventListener("change", (e) => switchForm_(e.target.value));
+
+    document.getElementById("addFormBtn").addEventListener("click", () => {
+      const name = prompt("اسم الفورم الجديد؟ (مثلاً: تسجيل حدث كذا)");
+      if (!name || !name.trim()) return;
+      postAdmin({ action: "addForm", name: name.trim() })
+        .then(res => {
+          if (res.status !== "success") throw new Error(res.message || "error");
+          toast(`اتعمل فورم "${name.trim()}" ✓`);
+          return loadFormsList(res.form.id);
+        })
+        .then(() => switchForm_(currentFormId))
+        .catch(err => toast("فشل إنشاء الفورم: " + err.message));
+    });
+
+    document.getElementById("renameFormBtn").addEventListener("click", () => {
+      const current = allForms.find(f => f.id === currentFormId);
+      const name = prompt("الاسم الجديد للفورم؟", current ? current.name : "");
+      if (!name || !name.trim()) return;
+      postAdmin({ action: "renameForm", formId: currentFormId, name: name.trim() })
+        .then(res => {
+          if (res.status !== "success") throw new Error(res.message || "error");
+          toast("اتغيّر الاسم ✓");
+          return loadFormsList(currentFormId);
+        })
+        .catch(err => toast("فشل تغيير الاسم: " + err.message));
+    });
+
+    // Archives (hides) or unarchives the currently-selected form. The
+    // default form can't be archived — nothing to toggle for it.
+    document.getElementById("archiveFormBtn").addEventListener("click", () => {
+      if (!currentFormId) { toast("الفورم الأساسي مينفعش يتأرشف"); return; }
+      const current = allForms.find(f => f.id === currentFormId);
+      const willArchive = !(current && current.archived);
+      const msg = willArchive
+        ? `متأكد عايز تأرشف "${current ? current.name : ""}"؟ هيختفي من القايمة بس بياناته وشيتاته هتفضل موجودة زي ما هي.`
+        : `تلغي أرشفة "${current ? current.name : ""}"؟`;
+      if (!confirm(msg)) return;
+      postAdmin({ action: "archiveForm", formId: currentFormId, archived: willArchive })
+        .then(res => {
+          if (res.status !== "success") throw new Error(res.message || "error");
+          toast(willArchive ? "اتأرشف الفورم ✓" : "اتلغت الأرشفة ✓");
+          // If we just archived the form we were LOOKING at (and we're not
+          // showing archived forms), fall back to the default form so the
+          // dashboard doesn't stay pointed at something now hidden.
+          const nextId = willArchive && !document.getElementById("showArchivedFormsToggle").checked ? "" : currentFormId;
+          return loadFormsList(nextId).then(() => switchForm_(currentFormId));
+        })
+        .catch(err => toast("فشل: " + err.message));
+    });
+
+    // Builds the public link for whichever form is selected — assumes
+    // dys_form.html is hosted in the SAME folder as this dashboard (the
+    // normal setup, since both files are deployed together).
+    function buildFormLink_() {
+      const url = new URL("dys_form.html", window.location.href);
+      if (currentFormId) url.searchParams.set("form", currentFormId);
+      return url.toString();
+    }
+
+    document.getElementById("copyFormLinkBtn").addEventListener("click", () => {
+      const link = buildFormLink_();
+      navigator.clipboard.writeText(link)
+        .then(() => toast("اتنسخ لينك الفورم ✓"))
+        .catch(() => prompt("انسخ اللينك يدويًا:", link));
+    });
+
+    // Opens a QR code image (generated by the same free service used for
+    // certificate QR codes — api.qrserver.com) encoding this form's link, in
+    // a new tab — right-click ▸ حفظ الصورة to save/print it.
+    document.getElementById("showFormQrBtn").addEventListener("click", () => {
+      const link = buildFormLink_();
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(link)}`;
+      window.open(qrUrl, "_blank");
+    });
 
     // ---- Form field visibility/required toggles ----
     // The original 9 fields (fixed section/label — these have bespoke UI on
@@ -2615,8 +2793,11 @@
         action: "saveConfig",
         formTitle: document.getElementById("cfgFormTitle").value.trim(),
         sheetBaseName: document.getElementById("cfgSheetBaseName").value.trim(),
+        membershipPrefix: document.getElementById("cfgMembershipPrefix").value.trim(),
         startAt: startVal ? new Date(startVal).toISOString() : "",
         endAt: endVal ? new Date(endVal).toISOString() : "",
+        confirmEmailSubject: document.getElementById("cfgConfirmEmailSubject").value.trim(),
+        confirmEmailBody: document.getElementById("cfgConfirmEmailBody").value.trim(),
         sendCertAuto: document.getElementById("cfgSendCertAuto").checked,
         // Always sent (even from the other save buttons on this tab) so this
         // list never gets silently overwritten by an unrelated save — it just
@@ -2846,7 +3027,17 @@
     }
 
     function renderCharts() {
-      if (typeof Chart === "undefined") return;
+      if (typeof Chart === "undefined") {
+        // Chart.js CDN failed to load (network/ad-blocker/CDN outage) — show
+        // a clear message in every chart slot instead of silent blank boxes.
+        document.querySelectorAll("#chartsPanel canvas").forEach(c => {
+          c.replaceWith(Object.assign(document.createElement("div"), {
+            className: "chart-empty",
+            textContent: "تعذر تحميل مكتبة الرسوم البيانية (Chart.js) — تأكد من اتصال الإنترنت وجرب تحدّث الصفحة.",
+          }));
+        });
+        return;
+      }
       destroyCharts();
       const colors = chartColors();
       Chart.defaults.color = colors.text;
