@@ -59,6 +59,10 @@
     body {
       margin: 0;
       padding: 0;
+      /* Defensive: never allow horizontal scrolling regardless of what any
+         element does layout-wise — this page should only ever scroll
+         vertically. */
+      overflow-x: hidden;
     }
 
     html {
@@ -1069,11 +1073,22 @@
     }
 
     .hp-field {
+      /* Standard "visually hidden" pattern — 1x1px, clipped, no negative
+         offset. The old version used `left: -9999px`, but `left`/`right` are
+         PHYSICAL properties (not RTL-aware) — on this RTL page that dragged
+         the document's scrollable width out to ~10,000px, so mobile browsers
+         opened on a blank stretch of empty page and needed a long swipe to
+         reach the real, visible form. This version never leaves the
+         viewport's flow at all, so it can't do that. */
       position: absolute !important;
-      left: -9999px !important;
-      top: -9999px !important;
-      width: 1px;
-      height: 1px;
+      width: 1px !important;
+      height: 1px !important;
+      margin: -1px !important;
+      padding: 0 !important;
+      overflow: hidden !important;
+      clip: rect(0, 0, 0, 0) !important;
+      white-space: nowrap !important;
+      border: 0 !important;
       opacity: 0;
       pointer-events: none;
     }
@@ -1491,6 +1506,12 @@
     // "whatsapp_chat" | "whatsapp_group" | "telegram" | "facebook" | "instagram" | "link".
     let DYS_SUCCESS_ACTIONS = null; // null = "not loaded yet / backend unreachable", not "empty on purpose"
 
+    // Which form/tenant THIS page instance is — read from this page's own
+    // URL (?form=xxx), e.g. dys_form.html?form=f_a1b2c3d4. Missing/empty =
+    // the original default form (see propKey_() in Code.gs) — so the
+    // original link with no ?form= at all keeps working exactly as before.
+    const DYS_FORM_ID = new URLSearchParams(window.location.search).get("form") || "";
+
     // ==================== i18n ====================
     const I18N = {
       ar: {
@@ -1689,7 +1710,7 @@
     }
 
     function loadRegistrationConfig() {
-      fetch(`${SCRIPT_URL}?action=publicConfig&_=${Date.now()}`, { cache: "no-store" })
+      fetch(`${SCRIPT_URL}?action=publicConfig&form=${encodeURIComponent(DYS_FORM_ID)}&_=${Date.now()}`, { cache: "no-store" })
         .then(r => r.json())
         .then(res => {
           if (res.status !== "success") return;
@@ -1828,7 +1849,7 @@
       nidCheckTimer = setTimeout(() => {
         if (nidCheckController) nidCheckController.abort();
         nidCheckController = new AbortController();
-        fetch(`${SCRIPT_URL}?action=checkNid&nationalId=${encodeURIComponent(id)}&_=${Date.now()}`, { signal: nidCheckController.signal, cache: "no-store" })
+        fetch(`${SCRIPT_URL}?action=checkNid&nationalId=${encodeURIComponent(id)}&form=${encodeURIComponent(DYS_FORM_ID)}&_=${Date.now()}`, { signal: nidCheckController.signal, cache: "no-store" })
           .then(r => r.json())
           .then(res => {
             if (res && res.status === "success" && typeof res.exists === "boolean") {
@@ -2442,6 +2463,7 @@
       data.whatsapp = digitsOnly(data.whatsapp);
       data.website = document.getElementById("website").value; // honeypot
       data.loadedAt = formLoadedAt;
+      data.formId = DYS_FORM_ID; // which form/tenant this submission belongs to — see propKey_() in Code.gs
 
       // Dynamic extra fields (data.address, data.birthDate, ...) + custom
       // fields (data.customFields.c_xxxxx, ...) — see buildDynamicFieldsStep_.
