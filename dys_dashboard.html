@@ -799,6 +799,24 @@
       }
     }
 
+    /* On narrow phones, stop relying on flex-wrap math for these rows (native
+       date/time inputs and long button rows can refuse to shrink below their
+       own intrinsic width even with min-width set on the flex item) — just
+       force them to stack top-to-bottom instead, so nothing can ever overflow
+       sideways and get invisibly clipped by the page's overflow-x: hidden. */
+    @media (max-width: 480px) {
+      .settings-row2,
+      .cycle-row,
+      #formSwitcherBar>span {
+        flex-direction: column;
+        align-items: stretch !important;
+      }
+
+      .cycle-row select {
+        width: 100%;
+      }
+    }
+
     .settings-card {
       background: var(--card-bg);
       border-radius: 16px;
@@ -941,6 +959,17 @@
       border-collapse: collapse;
       margin: 10px 0 4px;
       font-size: 13px;
+    }
+
+    /* Lets any of these tables scroll horizontally WITHIN their own card on a
+       narrow phone (e.g. the accounts table's action-button column) instead
+       of forcing the table — and the whole page — wider than the screen.
+       Deliberately a SEPARATE class from .table-scroll above (the main
+       registrations table), which also caps height/sticky-headers that
+       these small settings tables don't need. */
+    .mini-table-scroll {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
     }
 
     .field-config-table th,
@@ -1120,14 +1149,14 @@
            registration forms running at the same time, each with its own
            link/settings/sheets (see propKey_() in Code.gs). -->
       <div class="session-bar no-print" id="formSwitcherBar" style="gap:10px; flex-wrap:wrap;">
-        <span style="display:flex; align-items:center; gap:8px;">
+        <span style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <label for="formSwitcher" style="font-weight:700;">📋 الفورم:</label>
-          <select id="formSwitcher" style="min-width:200px;"></select>
+          <select id="formSwitcher" style="min-width:160px; max-width:100%;"></select>
           <label style="display:flex; align-items:center; gap:4px; font-size:13px; font-weight:400;">
             <input type="checkbox" id="showArchivedFormsToggle"> اعرض المؤرشف
           </label>
         </span>
-        <span style="display:flex; align-items:center; gap:8px;">
+        <span style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
           <button type="button" class="settings-btn" id="addFormBtn">➕ فورم جديد</button>
           <button type="button" class="settings-btn" id="renameFormBtn">✏️ تغيير الاسم</button>
           <button type="button" class="settings-btn" id="copyFormLinkBtn">🔗 نسخ لينك الفورم</button>
@@ -1368,18 +1397,20 @@
               "تواصل مع الـ HR" على واتساب أو "انضم لجروب الواتساب" أو أي لينك تاني. ضيف كل الاحتمالات اللي محتاجها
               مرة واحدة، وبعدين استخدم عمود "ظاهر" تحت عشان تشغّل/تقفل أي واحد فيهم وقت ما تحب من غير ما تعدّل أي
               حاجة تانية — اللي مقفول (❌) مش هيظهر للأعضاء خالص.</p>
-            <table class="field-config-table" id="successActionsTable" style="display:none;">
-              <thead>
-                <tr>
-                  <th>النوع</th>
-                  <th>النص على الزرار</th>
-                  <th>الرقم / اللينك</th>
-                  <th>ظاهر</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="successActionsBody"></tbody>
-            </table>
+            <div class="mini-table-scroll">
+              <table class="field-config-table" id="successActionsTable" style="display:none;">
+                <thead>
+                  <tr>
+                    <th>النوع</th>
+                    <th>النص على الزرار</th>
+                    <th>الرقم / اللينك</th>
+                    <th>ظاهر</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="successActionsBody"></tbody>
+              </table>
+            </div>
             <div class="settings-field" style="margin-top:10px;">
               <div class="cycle-row" style="flex-wrap:wrap;">
                 <select id="newSuccessActionType">
@@ -1418,18 +1449,20 @@
             <h4 style="margin:20px 0 6px; font-size:14px; color:#e8f0e8;">➕ حقول مخصصة (بالاسم اللي انت عايزه)</h4>
             <p class="hint">مش لاقي الحقل اللي محتاجه في القوائم فوق؟ ضيفه بنفسك هنا — أي اسم وأي نوع، وهيظهر في
               الاستمارة زي أي حقل تاني. تقدر تستخدمه بعدين في الشهادة بالكود اللي هيتعرض جنبه بعد ما تضيفه.</p>
-            <table class="field-config-table" id="customFieldsTable" style="display:none;">
-              <thead>
-                <tr>
-                  <th>الاسم</th>
-                  <th>الكود (للشهادة)</th>
-                  <th>ظاهر</th>
-                  <th>إجباري</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="customFieldsBody"></tbody>
-            </table>
+            <div class="mini-table-scroll">
+              <table class="field-config-table" id="customFieldsTable" style="display:none;">
+                <thead>
+                  <tr>
+                    <th>الاسم</th>
+                    <th>الكود (للشهادة)</th>
+                    <th>ظاهر</th>
+                    <th>إجباري</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="customFieldsBody"></tbody>
+              </table>
+            </div>
             <div class="settings-field" style="margin-top:10px;">
               <div class="cycle-row" style="flex-wrap:wrap;">
                 <input type="text" id="newCustomFieldLabel" placeholder="اسم الحقل (مثلاً: تاريخ الانضمام)">
@@ -1477,21 +1510,23 @@
               حساب من غير أي صلاحية من دول = عرض بس (زي viewer القديم). حساب معاه الأربعة = كل الصلاحيات (زي owner
               القديم).
             </p>
-            <table class="field-config-table" id="accountsTable">
-              <thead>
-                <tr>
-                  <th>الاسم</th>
-                  <th>الإيميل</th>
-                  <th>الصلاحيات</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody id="accountsBody">
-                <tr>
-                  <td colspan="4">جاري التحميل...</td>
-                </tr>
-              </tbody>
-            </table>
+            <div class="mini-table-scroll">
+              <table class="field-config-table" id="accountsTable">
+                <thead>
+                  <tr>
+                    <th>الاسم</th>
+                    <th>الإيميل</th>
+                    <th>الصلاحيات</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="accountsBody">
+                  <tr>
+                    <td colspan="4">جاري التحميل...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
             <div class="settings-field" style="margin-top:14px;">
               <label>إضافة حساب جديد</label>
               <div class="cycle-row" style="flex-wrap:wrap;">
@@ -1516,16 +1551,18 @@
             <p class="hint">آخر 500 حركة اتعملت من أي حساب في لوحة التحكم — مين عمل إيه وإمتى. للمراجعة بس، مش قابل
               للتعديل.</p>
             <button type="button" class="settings-btn" id="loadActivityLogBtn">تحميل السجل</button>
-            <table class="field-config-table" id="activityLogTable" style="display:none; margin-top:12px;">
-              <thead>
-                <tr>
-                  <th>الوقت</th>
-                  <th>الحساب</th>
-                  <th>الحركة</th>
-                </tr>
-              </thead>
-              <tbody id="activityLogBody"></tbody>
-            </table>
+            <div class="mini-table-scroll">
+              <table class="field-config-table" id="activityLogTable" style="display:none; margin-top:12px;">
+                <thead>
+                  <tr>
+                    <th>الوقت</th>
+                    <th>الحساب</th>
+                    <th>الحركة</th>
+                  </tr>
+                </thead>
+                <tbody id="activityLogBody"></tbody>
+              </table>
+            </div>
             <div class="settings-note" id="activityLogNote"></div>
           </div>
 
@@ -2471,10 +2508,12 @@
         }).join("");
         return `<div style="margin-top:14px;">
           <h4 style="margin:0 0 6px; font-size:13px; color:#9fd8ab;">${fieldSections[sectionKey] || sectionKey}</h4>
-          <table class="field-config-table">
-            <thead><tr><th></th><th>الحقل</th><th>ظاهر</th><th>إجباري</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
+          <div class="mini-table-scroll">
+            <table class="field-config-table">
+              <thead><tr><th></th><th>الحقل</th><th>ظاهر</th><th>إجباري</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
         </div>`;
       }).join("");
 
