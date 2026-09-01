@@ -1080,7 +1080,17 @@
           letter-spacing="2" fill="#6d8177">DELTA YOUTH</text>
       </svg>
       <h2>دخول الأدمن</h2>
-      <p>ادخل كلمة السر عشان تشوف بيانات المسجلين</p>
+      <p>ادخل بحساب جوجل بتاعك، أو بكلمة السر القديمة</p>
+
+      <div id="googleSignInBtn" style="display:flex; justify-content:center; margin:14px 0;"></div>
+      <div class="err" id="googlePendingNote" style="display:none; color:#c9a227; background:rgba(201,162,39,.12); border-color:rgba(201,162,39,.35);"></div>
+
+      <div style="display:flex; align-items:center; gap:10px; margin:14px 0; color:#8fa89a; font-size:12px;">
+        <span style="flex:1; height:1px; background:rgba(143,168,154,.3);"></span>
+        أو بكلمة السر
+        <span style="flex:1; height:1px; background:rgba(143,168,154,.3);"></span>
+      </div>
+
       <div class="pw-shell">
         <input type="password" id="passwordInput" placeholder="كلمة السر">
         <button type="button" class="toggle-pw" id="togglePwBtn" aria-label="إظهار كلمة السر">
@@ -1471,13 +1481,14 @@
               <thead>
                 <tr>
                   <th>الاسم</th>
+                  <th>الإيميل</th>
                   <th>الصلاحيات</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody id="accountsBody">
                 <tr>
-                  <td colspan="3">جاري التحميل...</td>
+                  <td colspan="4">جاري التحميل...</td>
                 </tr>
               </tbody>
             </table>
@@ -1534,9 +1545,16 @@
   <div class="toast no-print" id="toast"></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script>
     // ==================== CONFIG (kept identical to the working backend) ====================
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyQoy8ILXBbXduBU72ZSkjnSmGqEFbUwkEnLvBDgNC1lRnRnaAxu8p0YRKareIz22wN/exec";
+
+    // Paste your OAuth Client ID here too (SAME value as GOOGLE_CLIENT_ID in
+    // Code.gs — see BACKEND_SETUP_STEPS.md). Leave the placeholder and the
+    // "Sign in with Google" button just won't render — password login below
+    // it keeps working regardless.
+    const GOOGLE_CLIENT_ID = "839154817826-d9dhm6t1osl2oem173t84diprmfcbrvg.apps.googleusercontent.com";
 
     const SENSITIVE_HEADER_HINTS = ["National ID", "الرقم القومي", "Phone", "الهاتف", "Whatsapp", "واتساب", "Email", "ايميل", "إيميل"];
     const AUTO_LOGOUT_MINUTES = 15;
@@ -1699,6 +1717,22 @@
       ).join("");
     }
 
+    // Shared by both login paths (password + Google) — everything from here
+    // down is identical regardless of which credential got us in.
+    function completeLogin_(token, rememberIt) {
+      currentPassword = token;
+      if (rememberIt) {
+        try { sessionStorage.setItem("dys_dash_pwd", token); } catch (e) { }
+      }
+      gate.style.display = "none";
+      dashboard.classList.add("show");
+      headerActions.style.display = "flex";
+      populateFilters();
+      renderAll();
+      startInactivityWatch();
+      loadFormsList(currentFormId);
+    }
+
     loginBtn.addEventListener("click", () => {
       const pwd = passwordInput.value.trim();
       if (!pwd) return;
@@ -1706,19 +1740,7 @@
       loginBtn.textContent = "جاري التحقق...";
       loginErr.classList.remove("show");
       fetchData(pwd)
-        .then(() => {
-          currentPassword = pwd;
-          if (document.getElementById("rememberSession").checked) {
-            try { sessionStorage.setItem("dys_dash_pwd", pwd); } catch (e) { }
-          }
-          gate.style.display = "none";
-          dashboard.classList.add("show");
-          headerActions.style.display = "flex";
-          populateFilters();
-          renderAll();
-          startInactivityWatch();
-          loadFormsList(currentFormId);
-        })
+        .then(() => completeLogin_(pwd, document.getElementById("rememberSession").checked))
         .catch(() => {
           loginErr.classList.add("show");
         })
@@ -1728,13 +1750,76 @@
         });
     });
 
+    // ==================== Google Sign-In ====================
+    // Renders the button only if a real Client ID was pasted in above —
+    // otherwise this silently does nothing and password login (above) still
+    // works exactly as before.
+    const googlePendingNote = document.getElementById("googlePendingNote");
+
+    function handleGoogleCredential_(response) {
+      googlePendingNote.style.display = "none";
+      loginErr.classList.remove("show");
+      const gsiBtn = document.getElementById("googleSignInBtn");
+      gsiBtn.style.opacity = "0.5"; gsiBtn.style.pointerEvents = "none";
+
+      fetch(SCRIPT_URL, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "googleLogin", idToken: response.credential }),
+      })
+        .then(r => r.json())
+        .then(res => {
+          if (res.status === "success") {
+            return fetchData(res.sessionToken).then(() => completeLogin_(res.sessionToken, document.getElementById("rememberSession").checked));
+          }
+          if (res.status === "pending") {
+            googlePendingNote.textContent = res.message || "طلبك اتبعت — استنى الموافقة.";
+            googlePendingNote.style.display = "block";
+            return;
+          }
+          loginErr.textContent = res.message || "فشل الدخول بحساب جوجل.";
+          loginErr.classList.add("show");
+        })
+        .catch(() => {
+          loginErr.textContent = "تعذر الاتصال — جرب تاني.";
+          loginErr.classList.add("show");
+        })
+        .finally(() => { gsiBtn.style.opacity = "1"; gsiBtn.style.pointerEvents = "auto"; });
+    }
+
+    if (window.google && google.accounts && GOOGLE_CLIENT_ID.indexOf("PASTE_YOUR_CLIENT_ID_HERE") === -1) {
+      google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: handleGoogleCredential_ });
+      google.accounts.id.renderButton(document.getElementById("googleSignInBtn"), {
+        type: "standard", theme: "outline", size: "large", text: "signin_with", locale: "ar",
+      });
+    } else if (!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID.indexOf("PASTE_YOUR_CLIENT_ID_HERE") > -1) {
+      document.getElementById("googleSignInBtn").style.display = "none";
+    }
+    // If google.accounts isn't ready yet (script still loading), retry once
+    // shortly after — GIS usually finishes loading well before someone
+    // actually reaches for the button, so this is just a safety net.
+    else {
+      setTimeout(() => {
+        if (window.google && google.accounts) {
+          google.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: handleGoogleCredential_ });
+          google.accounts.id.renderButton(document.getElementById("googleSignInBtn"), {
+            type: "standard", theme: "outline", size: "large", text: "signin_with", locale: "ar",
+          });
+        }
+      }, 800);
+    }
+
     // try to resume a session-only login (survives refresh in same tab, cleared when tab closes)
     (function tryResumeSession() {
       let pwd;
       try { pwd = sessionStorage.getItem("dys_dash_pwd"); } catch (e) { return; }
       if (!pwd) return;
-      passwordInput.value = pwd;
-      loginBtn.click();
+      loginBtn.disabled = true;
+      fetchData(pwd)
+        .then(() => completeLogin_(pwd, true))
+        .catch(() => { try { sessionStorage.removeItem("dys_dash_pwd"); } catch (e2) { } })
+        .finally(() => { loginBtn.disabled = false; });
     })();
 
     document.getElementById("refreshBtn").addEventListener("click", () => {
@@ -1754,6 +1839,7 @@
       headerActions.style.display = "none";
       gate.style.display = "block";
       passwordInput.value = "";
+      try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch (e) { }
       clearTimeout(inactivityTimer);
       clearInterval(autoRefreshTimer);
       if (reason) toast(reason);
@@ -2729,26 +2815,58 @@
       const body = document.getElementById("accountsBody");
       accounts = Array.isArray(accounts) ? accounts : [];
       if (!accounts.length) {
-        body.innerHTML = `<tr><td colspan="3">مفيش حسابات مسجلة</td></tr>`;
+        body.innerHTML = `<tr><td colspan="4">مفيش حسابات مسجلة</td></tr>`;
         return;
       }
-      body.innerHTML = accounts.map(a => `
-        <tr data-name="${a.name.replace(/"/g, "&quot;")}">
-          <td>${a.name}</td>
-          <td>${describePermissions_(a.permissions)}</td>
-          <td><button type="button" class="settings-btn muted remove-account-btn" style="padding:2px 10px; font-size:12px;">حذف</button></td>
-        </tr>
-      `).join("");
+      body.innerHTML = accounts.map(a => {
+        const isPending = a.status === "pending";
+        const actionCell = isPending
+          ? `<button type="button" class="settings-btn primary approve-account-btn" style="padding:2px 10px; font-size:12px;">قبول</button>
+             <button type="button" class="settings-btn muted reject-account-btn" style="padding:2px 10px; font-size:12px;">رفض</button>`
+          : `<button type="button" class="settings-btn muted remove-account-btn" style="padding:2px 10px; font-size:12px;">حذف</button>`;
+        return `
+        <tr data-name="${a.name.replace(/"/g, "&quot;")}" data-email="${(a.email || "").replace(/"/g, "&quot;")}">
+          <td>${a.name}${isPending ? ' <span style="color:#c9a227;">(بانتظار الموافقة)</span>' : ""}</td>
+          <td style="direction:ltr; text-align:end;">${a.email || "—"}</td>
+          <td>${isPending ? "طلب دخول بحساب جوجل — لسه من غير صلاحيات" : describePermissions_(a.permissions)}</td>
+          <td>${actionCell}</td>
+        </tr>`;
+      }).join("");
       body.querySelectorAll(".remove-account-btn").forEach(btn => {
         btn.addEventListener("click", () => {
           const name = btn.closest("tr").dataset.name;
-          const ok = confirm(`هتمسح حساب "${name}"؟ هو مش هيقدر يدخل تاني بكلمة السر دي.`);
+          const ok = confirm(`هتمسح حساب "${name}"؟ هو مش هيقدر يدخل تاني.`);
           if (!ok) return;
           postAdmin({ action: "removeAdminAccount", name })
             .then(res => {
               if (res.status !== "success") throw new Error(res.message || "error");
               renderAccountsTable(res.accounts);
               toast("اتمسح الحساب ✓");
+            })
+            .catch(err => setNote("accountsNote", "حصل خطأ: " + err.message, "err"));
+        });
+      });
+      body.querySelectorAll(".approve-account-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const email = btn.closest("tr").dataset.email;
+          postAdmin({ action: "reviewAccess", email, approve: true })
+            .then(res => {
+              if (res.status !== "success") throw new Error(res.message || "error");
+              renderAccountsTable(res.accounts);
+              toast("اتوافق على الدخول ✓ — حدد صلاحياته دلوقتي");
+            })
+            .catch(err => setNote("accountsNote", "حصل خطأ: " + err.message, "err"));
+        });
+      });
+      body.querySelectorAll(".reject-account-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const email = btn.closest("tr").dataset.email;
+          if (!confirm(`ترفض طلب دخول ${email}؟`)) return;
+          postAdmin({ action: "reviewAccess", email, approve: false })
+            .then(res => {
+              if (res.status !== "success") throw new Error(res.message || "error");
+              renderAccountsTable(res.accounts);
+              toast("اترفض الطلب");
             })
             .catch(err => setNote("accountsNote", "حصل خطأ: " + err.message, "err"));
         });
