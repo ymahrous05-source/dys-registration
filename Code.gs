@@ -42,7 +42,71 @@
 // but nothing changed."
 const CODE_VERSION = "2026-08-25-checkin-scanner";
 
-// The five independently-grantable admin capabilities. "viewData" is always
+// ---------------------------------------------------------------------------
+// Google Sign-In (optional — the old shared password keeps working forever
+// alongside this, nothing breaks if you never set this up)
+// ---------------------------------------------------------------------------
+// Paste your OAuth Client ID here (from Google Cloud Console ▸ APIs &
+// Services ▸ Credentials — see BACKEND_SETUP_STEPS.md). Leave the
+// placeholder as-is and the "تسجيل دخول بجوجل" button just won't work yet —
+// everything else (password login) is unaffected.
+const GOOGLE_CLIENT_ID = "839154817826-d9dhm6t1osl2oem173t84diprmfcbrvg.apps.googleusercontent.com";
+
+// How long a Google-signed-in session stays valid before that person has to
+// sign in again (they'll just see the "Sign in with Google" button reappear
+// — nothing is lost, no data at risk).
+const SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+// ---------------------------------------------------------------------------
+// Outgoing email sender identity
+// ---------------------------------------------------------------------------
+// All emails (confirmations, certificates, new-access notifications) go out
+// "from" this address instead of whichever Google account happens to run
+// the script.
+//
+// ⚠️ REQUIRES a one-time Gmail setup step first, or every send will fail:
+// the Google account that owns/runs this Apps Script project must add
+// FROM_EMAIL as a verified "Send mail as" address —
+//   Gmail ⚙️ (that account's inbox) ▸ See all settings ▸ Accounts and Import
+//   ▸ "Send mail as" ▸ Add another email address ▸ enter FROM_EMAIL ▸ Gmail
+//   sends a verification link/code to FROM_EMAIL's own inbox ▸ confirm it.
+// Once verified, this takes effect immediately — no redeploy needed beyond
+// the normal "paste the value, save, New deployment" flow.
+//
+// Leave FROM_EMAIL as "" to skip all this and just send from the script
+// owner's own address, exactly like before this feature existed.
+const FROM_EMAIL = "dyssanad@gmail.com";
+const FROM_NAME = "سند شباب الدلتا";
+
+// Central email sender — every outgoing email in this file goes through
+// here, so the "from" identity only ever needs to be changed in ONE place.
+// `extraOptions` can add things like {attachments: [...]} on top.
+function sendEmail_(to, subject, body, extraOptions) {
+  const options = Object.assign({ name: FROM_NAME }, extraOptions || {});
+  if (FROM_EMAIL) options.from = FROM_EMAIL;
+  GmailApp.sendEmail(to, subject, body, options);
+}
+
+// ---------------------------------------------------------------------------
+// AI chat assistant (optional — the FAQ quick-buttons in both chat widgets
+// work with zero setup; only the free-text "اكتب سؤالك" box needs a key)
+// ---------------------------------------------------------------------------
+// Gemini is tried FIRST (free tier — get a key in 2 minutes at
+// aistudio.google.com ▸ Get API key). Grok is the FALLBACK if Gemini fails
+// or isn't configured (x.ai — needs billing enabled, no generous free tier,
+// so it's optional). Leave either/both placeholders as-is to skip that
+// provider entirely — the chat still works with just one, or falls back to
+// "use the quick questions instead" if neither is set.
+const GEMINI_API_KEY = "PASTE_YOUR_GEMINI_API_KEY_HERE";
+const GROK_API_KEY = "PASTE_YOUR_GROK_API_KEY_HERE";
+
+// Simple daily message cap (shared across all forms) so a misconfigured
+// widget or a bored visitor can't run up an unexpected API bill overnight.
+// Resets automatically at midnight (script timezone) — raise this if 300/day
+// is genuinely too low for your traffic.
+const AI_DAILY_LIMIT = 300;
+
+// The four independently-grantable admin capabilities. "viewData" is always
 // true for every account (there's no point in an account that can log in
 // and see nothing) — the other four are what actually differ per account.
 // Add a new capability here + wire it into ACTION_PERMISSIONS below and the
@@ -193,11 +257,14 @@ function doGet(e) {
   try {
     if (action === "list") return handleList_(e);
     if (action === "checkNid") return handleCheckNid_(e);
-    if (action === "publicConfig") return handlePublicConfig_();
+    if (action === "publicConfig") return handlePublicConfig_(e);
     if (action === "getConfig") return handleGetConfig_(e);
     if (action === "listCycles") return handleListCycles_(e);
     if (action === "diagnostics") return handleDiagnostics_(e);
     if (action === "verifyMember") return handleVerifyMember_(e); // event check-in scanner — read-only lookup
+    if (action === "listForms") return handleListForms_(e);
+    if (action === "approveAccess") return handleReviewAccess_(e, true);
+    if (action === "rejectAccess") return handleReviewAccess_(e, false);
 
     return jsonOutput_({
       status: "success",
@@ -226,6 +293,17 @@ function doPost(e) {
     // permission; see handleCheckin_ for its own auth check.
     if (payload && payload.action === "checkin") return handleCheckin_(payload);
 
+    // Google Sign-In — this IS the login step itself, so (unlike everything
+    // else below) it can't require a password/session first; see
+    // handleGoogleLogin_ for its own verification of the Google ID token.
+    if (payload && payload.action === "googleLogin") return handleGoogleLogin_(payload);
+
+    // AI chat widget (form + dashboard). Its own auth check is inside
+    // handleChatAI_ (only the dashboard context requires a password/session
+    // — the form-facing widget is public, same as the registration form
+    // itself, and never sees any registrant data — see buildFormAiPrompt_).
+    if (payload && payload.action === "chatAI") return handleChatAI_(payload);
+
     // Admin-only actions (settings panel in the dashboard) — every one of
     // these re-checks the password itself, so nothing here is trusted blindly.
     const ADMIN_ACTIONS = [
@@ -233,8 +311,9 @@ function doPost(e) {
       "uploadCertTemplate", "removeCertTemplate",
       "sendCertificate", "sendCertificatesBulk", "sendTestCertificate",
       "saveFieldConfig",
-      "listAdminAccounts", "addAdminAccount", "removeAdminAccount",
+      "listAdminAccounts", "addAdminAccount", "removeAdminAccount", "reviewAccess", "updateAccountPermissions",
       "exportExcel", "getActivityLog",
+      "addForm", "renameForm", "archiveForm",
     ];
     if (payload && ADMIN_ACTIONS.indexOf(payload.action) > -1) {
       return handleAdminAction_(payload);
@@ -262,7 +341,8 @@ function handleList_(e) {
     return jsonOutput_({ status: "error", message: "Unauthorized" });
   }
 
-  const cfg = getRegConfig_();
+  const formId = (e.parameter.form || "").trim();
+  const cfg = getRegConfig_(formId);
   const requestedSheet = (e.parameter.sheet || "").trim();
   const sheetName = requestedSheet || cfg.activeSheetName;
 
@@ -306,10 +386,11 @@ function handleList_(e) {
 
 function handleCheckNid_(e) {
   const nationalId = (e.parameter.nationalId || "").trim();
+  const formId = String(e.parameter.form || "").trim();
   if (!/^[0-9]{14}$/.test(nationalId)) {
     return jsonOutput_({ status: "success", exists: false });
   }
-  return jsonOutput_({ status: "success", exists: isDuplicateNid_(nationalId) });
+  return jsonOutput_({ status: "success", exists: isDuplicateNid_(nationalId, formId) });
 }
 
 
@@ -321,8 +402,8 @@ function handleCheckNid_(e) {
 // Reads FIELD_CONFIG from Script Properties and fills in defaults for any
 // field/key that's missing — so an install that never touched this Settings
 // card behaves exactly like the original hardcoded validation.
-function getFieldConfig_() {
-  const raw = PropertiesService.getScriptProperties().getProperty("FIELD_CONFIG");
+function getFieldConfig_(formId) {
+  const raw = PropertiesService.getScriptProperties().getProperty(propKey_("FIELD_CONFIG", formId));
   let stored = {};
   if (raw) {
     try { stored = JSON.parse(raw); } catch (e) { stored = {}; }
@@ -349,6 +430,7 @@ function getFieldConfig_() {
 // "🧩 حقول الاستمارة" settings card. Sending fields without customFields (or
 // vice versa) only touches the one that was sent.
 function handleSaveFieldConfig_(payload) {
+  const formId = String(payload.formId || "").trim();
   const incoming = payload.fields || {};
   const sanitized = {};
   Object.keys(ALL_BUILTIN_FIELDS).forEach((key, index) => {
@@ -359,15 +441,16 @@ function handleSaveFieldConfig_(payload) {
       order: typeof f.order === "number" ? f.order : index,
     };
   });
-  PropertiesService.getScriptProperties().setProperty("FIELD_CONFIG", JSON.stringify(sanitized));
+  PropertiesService.getScriptProperties().setProperty(propKey_("FIELD_CONFIG", formId), JSON.stringify(sanitized));
 
-  let customFields = getCustomFields_();
+  let customFields = getCustomFields_(formId);
   if (Array.isArray(payload.customFields)) {
-    customFields = payload.customFields.map(sanitizeCustomField_).filter(Boolean);
+    const incomingKeys = payload.customFields.map(cf => cf && cf.key).filter(Boolean);
+    customFields = payload.customFields.map(cf => sanitizeCustomField_(cf, incomingKeys)).filter(Boolean);
     // Custom fields also carry their own drag order (index in the array the
     // dashboard sends = the order the admin arranged them in).
     customFields.forEach((cf, i) => { cf.order = i; });
-    saveCustomFields_(customFields);
+    saveCustomFields_(customFields, formId);
   }
   return jsonOutput_({ status: "success", fieldConfig: sanitized, customFields });
 }
@@ -381,8 +464,8 @@ function handleSaveFieldConfig_(payload) {
 // dashboard's "🧩 حقول الاستمارة" card after you add it.
 // ---------------------------------------------------------------------------
 
-function getCustomFields_() {
-  const raw = PropertiesService.getScriptProperties().getProperty("CUSTOM_FIELDS");
+function getCustomFields_(formId) {
+  const raw = PropertiesService.getScriptProperties().getProperty(propKey_("CUSTOM_FIELDS", formId));
   if (!raw) return [];
   try {
     const arr = JSON.parse(raw);
@@ -392,17 +475,78 @@ function getCustomFields_() {
   }
 }
 
-function saveCustomFields_(fields) {
-  PropertiesService.getScriptProperties().setProperty("CUSTOM_FIELDS", JSON.stringify(fields));
+function saveCustomFields_(fields, formId) {
+  PropertiesService.getScriptProperties().setProperty(propKey_("CUSTOM_FIELDS", formId), JSON.stringify(fields));
 }
 
 const CUSTOM_FIELD_TYPES = ["text", "textarea", "number", "date", "select", "checkbox"];
 
-// Forces an incoming {label, type, options, required, enabled, key} object
-// into a trusted shape. Existing custom fields keep their original `key`
-// (passed back by the dashboard) so certificate placeholders referencing
-// them don't silently break when you just tweak the label or required flag.
-function sanitizeCustomField_(cf) {
+// ---------------------------------------------------------------------------
+// "Success screen" actions — the buttons shown to a registrant right after
+// they submit the form (dashboard's "🎉 خيارات بعد التسجيل" card). Every
+// possible option lives here as a TYPE; the dashboard just enables/disables
+// individual entries and fills in the label/value — nothing here needs to
+// change again when the org wants to add/remove a button, only the Settings
+// tab does.
+//
+//   whatsapp_chat  — direct 1:1 WhatsApp chat with a number (e.g. HR/committee),
+//                    opened with a pre-filled message containing the
+//                    registrant's name + membership number.
+//   whatsapp_group — join-link for a WhatsApp group/community
+//                    (chat.whatsapp.com/... or whatsapp.com/channel/...).
+//   telegram       — Telegram group/channel link (t.me/...).
+//   facebook       — Facebook page/group link.
+//   instagram      — Instagram profile link.
+//   link           — any other custom link/button (Drive folder, survey,
+//                     another website, ...).
+const SUCCESS_ACTION_TYPES = ["whatsapp_chat", "whatsapp_group", "telegram", "facebook", "instagram", "link"];
+
+function getSuccessActions_(formId) {
+  const raw = PropertiesService.getScriptProperties().getProperty(propKey_("SUCCESS_ACTIONS", formId));
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveSuccessActions_(actions, formId) {
+  PropertiesService.getScriptProperties().setProperty(propKey_("SUCCESS_ACTIONS", formId), JSON.stringify(actions));
+}
+
+// Forces an incoming {id, type, label, value, enabled} object into a trusted
+// shape, same spirit as sanitizeCustomField_ above. Existing actions keep
+// their original `id` (passed back by the dashboard) so re-saving the list
+// after a small edit doesn't reshuffle anything.
+function sanitizeSuccessAction_(a) {
+  const label = String((a && a.label) || "").trim();
+  const value = String((a && a.value) || "").trim();
+  if (!label || !value) return null;
+  const type = SUCCESS_ACTION_TYPES.indexOf(a && a.type) > -1 ? a.type : "link";
+  const id = (a && a.id && /^sa_[a-z0-9]+$/.test(a.id)) ? a.id : "sa_" + Utilities.getUuid().replace(/-/g, "").slice(0, 8);
+  return {
+    id,
+    type,
+    label,
+    value,
+    enabled: a.enabled !== false,
+  };
+}
+
+// Forces an incoming {label, type, options, required, enabled, key,
+// dependsOnKey, dependsOnValue} object into a trusted shape. Existing custom
+// fields keep their original `key` (passed back by the dashboard) so
+// certificate placeholders referencing them don't silently break when you
+// just tweak the label or required flag.
+//
+// dependsOnKey/dependsOnValue make this field conditional: if set, the form
+// only shows (and only requires) this field once the OTHER field named
+// dependsOnKey currently holds the value dependsOnValue — e.g. a "committee"
+// field that only appears once "Are you a member?" is answered "Yes". Leave
+// dependsOnKey empty for a normal, always-visible field (the default).
+function sanitizeCustomField_(cf, validKeys) {
   const label = String((cf && cf.label) || "").trim();
   if (!label) return null;
   const type = CUSTOM_FIELD_TYPES.indexOf(cf.type) > -1 ? cf.type : "text";
@@ -419,11 +563,228 @@ function sanitizeCustomField_(cf) {
       ? cf.options.map(String).map(s => s.trim()).filter(Boolean)
       : String(cf.options || "").split(",").map(s => s.trim()).filter(Boolean);
   }
+  const dependsOnKey = String((cf && cf.dependsOnKey) || "").trim();
+  // Only keep the dependency if it points at a real, different field — a
+  // dangling reference (the other field got deleted) would otherwise hide
+  // this one forever with no way to fix it from the UI.
+  if (dependsOnKey && dependsOnKey !== key && (!validKeys || validKeys.indexOf(dependsOnKey) > -1)) {
+    out.dependsOnKey = dependsOnKey;
+    out.dependsOnValue = String((cf && cf.dependsOnValue) || "");
+  }
   return out;
 }
 
-function handlePublicConfig_() {
-  const cfg = getRegConfig_();
+// ---------------------------------------------------------------------------
+// AI chat assistant
+// ---------------------------------------------------------------------------
+
+function aiConfigured_(key) {
+  return key && key.indexOf("PASTE_YOUR") === -1;
+}
+
+function checkAiQuota_() {
+  const props = PropertiesService.getScriptProperties();
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  return Number(props.getProperty("AI_QUOTA_" + today) || "0") < AI_DAILY_LIMIT;
+}
+
+function bumpAiQuota_() {
+  const props = PropertiesService.getScriptProperties();
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  const key = "AI_QUOTA_" + today;
+  props.setProperty(key, String(Number(props.getProperty(key) || "0") + 1));
+}
+
+// history: [{role:"user"|"bot", text}, ...] — the widget's own recent
+// messages, so the assistant can follow a back-and-forth instead of
+// answering each message in total isolation.
+function callGemini_(systemPrompt, userMessage, history) {
+  if (!aiConfigured_(GEMINI_API_KEY)) return null;
+  try {
+    const contents = (history || []).map(h => ({ role: h.role === "user" ? "user" : "model", parts: [{ text: h.text }] }));
+    contents.push({ role: "user", parts: [{ text: userMessage }] });
+    const res = UrlFetchApp.fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY,
+      {
+        method: "post",
+        contentType: "application/json",
+        muteHttpExceptions: true,
+        payload: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents,
+          generationConfig: { temperature: 0.4, maxOutputTokens: 400 },
+        }),
+      }
+    );
+    if (res.getResponseCode() !== 200) return null;
+    const data = JSON.parse(res.getContentText());
+    const parts = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
+    const text = parts && parts[0] && parts[0].text;
+    return text ? text.trim() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function callGrok_(systemPrompt, userMessage, history) {
+  if (!aiConfigured_(GROK_API_KEY)) return null;
+  try {
+    const messages = [{ role: "system", content: systemPrompt }];
+    (history || []).forEach(h => messages.push({ role: h.role === "user" ? "user" : "assistant", content: h.text }));
+    messages.push({ role: "user", content: userMessage });
+    const res = UrlFetchApp.fetch("https://api.x.ai/v1/chat/completions", {
+      method: "post",
+      contentType: "application/json",
+      muteHttpExceptions: true,
+      headers: { Authorization: "Bearer " + GROK_API_KEY },
+      payload: JSON.stringify({ model: "grok-beta", messages, temperature: 0.4, max_tokens: 400 }),
+    });
+    if (res.getResponseCode() !== 200) return null;
+    const data = JSON.parse(res.getContentText());
+    const text = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+    return text ? text.trim() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Builds the "brain" the registrant-facing widget gets — only PUBLIC info
+// (same data publicConfig already exposes), so it can accurately answer
+// "when does registration close", "what fields do I need", "is there a
+// WhatsApp group", etc. for THIS specific form, without ever seeing any
+// registrant's actual data.
+function buildFormAiPrompt_(cfg) {
+  const fc = cfg.fieldConfig || {};
+  const fieldLabels = Object.keys(ALL_BUILTIN_FIELDS)
+    .filter(k => fc[k] && fc[k].enabled)
+    .map(k => ALL_BUILTIN_FIELDS[k].label + (fc[k].required ? " (إجباري)" : " (اختياري)"));
+  (cfg.customFields || []).forEach(c => fieldLabels.push(c.label + (c.required ? " (إجباري)" : " (اختياري)")));
+
+  const phase = getRegPhase_(cfg);
+  const phaseText = phase === "open" ? "التسجيل مفتوح دلوقتي"
+    : phase === "before" ? `التسجيل لسه ماوصلش، هيفتح في ${cfg.startAt || "غير محدد"}`
+    : `التسجيل قفل${cfg.endAt ? " من " + cfg.endAt : ""}`;
+
+  const actionsText = (cfg.successActions || [])
+    .filter(a => a.enabled !== false)
+    .map(a => `- ${a.label}`).join("\n") || "(مفيش)";
+
+  return (
+    `انت مساعد ودود بيرد على أسئلة الناس اللي بتحاول تسجل في استمارة "${cfg.formTitle || "التسجيل"}" ` +
+    `بتاعة سند شباب الدلتا (منظمة شبابية تطوعية).\n\n` +
+    `معلومات عن الاستمارة دي:\n` +
+    `- حالة التسجيل: ${phaseText}\n` +
+    `- الحقول المطلوبة/الموجودة في الاستمارة: ${fieldLabels.join("، ") || "الاسم والرقم القومي بس"}\n` +
+    `- بعد التسجيل، طرق التواصل المتاحة: \n${actionsText}\n\n` +
+    `تعليمات مهمة:\n` +
+    `- رد بالعربي العامي المصري، بإيجاز ووضوح (2-4 جمل عادةً).\n` +
+    `- لو حد سأل سؤال مش عن التسجيل ده خالص (زي أسئلة عامة أو تقنية بعيدة)، رد بلطف إنك هنا للمساعدة في التسجيل بس.\n` +
+    `- لو حد سأل عن بياناته الشخصية أو بيانات حد تاني، وضّح إنك معندكش وصول لأي بيانات مسجلين، واقترح يتواصل مع فريق اللجنة.\n` +
+    `- ماتخترعش معلومات مش موجودة قدامك — لو مش متأكد، قول إنك مش متأكد واقترح التواصل المباشر.`
+  );
+}
+
+// Builds the ADMIN-facing widget's "brain" — only AGGREGATE stats (counts/
+// percentages), never individual registrant rows or any PII (names,
+// national IDs, phone numbers, emails are never sent to the AI provider).
+function buildDashboardAiPrompt_(cfg, stats) {
+  return (
+    `انت مساعد بيساعد الأدمن (مسؤول لوحة تحكم سند شباب الدلتا) يفهم بيانات ولوحة تحكم فورم "${cfg.formTitle || "بدون عنوان"}" ` +
+    `ويستخدم الداشبورد صح.\n\n` +
+    `إحصائيات إجمالية عن الفورم ده (الشيت الحالي: ${cfg.activeSheetName}):\n` +
+    `- إجمالي المسجلين: ${stats.total}\n` +
+    `- نسبة الإناث: ${stats.femalePct}%\n` +
+    `- نسبة الخريجين: ${stats.graduatePct}%\n` +
+    `- نسبة اللي بيشتغلوا حاليًا: ${stats.employedPct}%\n` +
+    `- تسجيلات آخر 7 أيام: ${stats.last7Days}\n` +
+    `- أكتر 3 صفات/كليات تكرارًا: ${stats.topBreakdown}\n\n` +
+    `تعليمات مهمة:\n` +
+    `- رد بالعربي العامي المصري، بإيجاز.\n` +
+    `- استخدم الأرقام دي بس للإجابة عن أسئلة إحصائية — ماعندكش وصول لأي بيانات شخصية لأي مسجل (اسم، رقم قومي، تليفون، إيميل) خالص، فلو سأل عن حد بعينه وضّح إنه يشوف الجدول نفسه في تبويب "📋 الجدول".\n` +
+    `- لو سأل "إزاي أعمل كذا" في الداشبورد (زي رفع شعار، تغيير الإعدادات، إضافة فورم)، ساعده باختصار بالخطوات.\n` +
+    `- ماتخترعش أرقام أو معلومات مش معطاة لك.`
+  );
+}
+
+// Only counts/percentages/breakdowns — deliberately never returns a single
+// row of actual registrant data (see buildDashboardAiPrompt_ above).
+function computeAggregateStats_(sheet) {
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0] || [];
+  const rows = data.slice(1).filter(r => r.some(c => String(c).trim() !== ""));
+  const col = (name) => headers.indexOf(name);
+
+  const genderCol = col("Gender"), gradCol = col("Graduate"), jobCol = col("Has Job"),
+    facultyCol = col("Faculty"), tsCol = col("Timestamp");
+
+  const total = rows.length;
+  const pct = (n) => total ? Math.round((n / total) * 100) : 0;
+
+  const femaleCount = genderCol > -1 ? rows.filter(r => /أنث|بنت|female/i.test(String(r[genderCol]))).length : 0;
+  const gradCount = gradCol > -1 ? rows.filter(r => /^(نعم|yes|true)/i.test(String(r[gradCol]))).length : 0;
+  const jobCount = jobCol > -1 ? rows.filter(r => /^(نعم|yes|true)/i.test(String(r[jobCol]))).length : 0;
+
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const last7Days = tsCol > -1 ? rows.filter(r => {
+    const t = r[tsCol] instanceof Date ? r[tsCol].getTime() : new Date(r[tsCol]).getTime();
+    return !isNaN(t) && t >= weekAgo;
+  }).length : 0;
+
+  const facultyCounts = {};
+  if (facultyCol > -1) rows.forEach(r => {
+    const v = String(r[facultyCol]).trim();
+    if (v) facultyCounts[v] = (facultyCounts[v] || 0) + 1;
+  });
+  const topBreakdown = Object.entries(facultyCounts).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([k, v]) => `${k} (${v})`).join("، ") || "غير متاح";
+
+  return { total, femalePct: pct(femaleCount), graduatePct: pct(gradCount), employedPct: pct(jobCount), last7Days, topBreakdown };
+}
+
+// action=chatAI (POST) — payload: {context: "form"|"dashboard", formId,
+// message, history, password (dashboard only)}.
+function handleChatAI_(payload) {
+  const context = payload.context === "dashboard" ? "dashboard" : "form";
+  const message = String(payload.message || "").trim().slice(0, 800);
+  if (!message) return jsonOutput_({ status: "error", message: "اكتب سؤالك الأول." });
+
+  if (context === "dashboard") {
+    const account = requirePermission_(payload.password || "", "viewData");
+    if (!account) return jsonOutput_({ status: "error", message: "Unauthorized" });
+  }
+
+  if (!aiConfigured_(GEMINI_API_KEY) && !aiConfigured_(GROK_API_KEY)) {
+    return jsonOutput_({ status: "error", message: "المساعد الذكي لسه مش متفعّل — استخدم الأسئلة الجاهزة تحت." });
+  }
+  if (!checkAiQuota_()) {
+    return jsonOutput_({ status: "error", message: "المساعد وصل للحد اليومي من الأسئلة — جرب تاني بكرة، أو استخدم الأسئلة الجاهزة." });
+  }
+
+  const formId = String(payload.formId || "").trim();
+  const cfg = getRegConfig_(formId);
+  let systemPrompt;
+  if (context === "dashboard") {
+    const sheet = findSheet_(cfg.activeSheetName);
+    const stats = sheet ? computeAggregateStats_(sheet) : { total: 0, femalePct: 0, graduatePct: 0, employedPct: 0, last7Days: 0, topBreakdown: "غير متاح" };
+    systemPrompt = buildDashboardAiPrompt_(cfg, stats);
+  } else {
+    systemPrompt = buildFormAiPrompt_(cfg);
+  }
+
+  const history = Array.isArray(payload.history) ? payload.history.slice(-8) : [];
+  let reply = callGemini_(systemPrompt, message, history);
+  let provider = "gemini";
+  if (!reply) { reply = callGrok_(systemPrompt, message, history); provider = "grok"; }
+  if (!reply) {
+    return jsonOutput_({ status: "error", message: "المساعد مش متاح دلوقتي — جرب تاني كمان شوية، أو استخدم الأسئلة الجاهزة." });
+  }
+  bumpAiQuota_();
+  return jsonOutput_({ status: "success", reply, provider });
+}
+
+function handlePublicConfig_(e) {
+  const formId = String((e && e.parameter && e.parameter.form) || "").trim();
+  const cfg = getRegConfig_(formId);
   const phase = getRegPhase_(cfg); // "before" | "open" | "closed"
   return jsonOutput_({
     status: "success",
@@ -436,6 +797,9 @@ function handlePublicConfig_() {
     fieldDefs: cfg.fieldDefs,
     fieldSections: cfg.fieldSections,
     customFields: cfg.customFields,
+    // Public form only ever needs the ENABLED buttons — disabled ones stay
+    // hidden from anyone inspecting the public endpoint, not just from the UI.
+    successActions: (cfg.successActions || []).filter(a => a.enabled !== false),
     serverNow: new Date().toISOString(),
   });
 }
@@ -445,22 +809,75 @@ function handleGetConfig_(e) {
   if (!requirePermission_(e.parameter.password || "", "manageSettings")) {
     return jsonOutput_({ status: "error", message: "Unauthorized" });
   }
-  return jsonOutput_({ status: "success", config: getRegConfig_() });
+  const formId = String(e.parameter.form || "").trim();
+  return jsonOutput_({ status: "success", config: getRegConfig_(formId) });
+}
+
+// Which sheets were EXPLICITLY created for a given form (via startNewCycle_
+// or getSheet_'s auto-create fallback) — see addFormSheetName_ below. This
+// is what handleListCycles_ uses to know which sheets belong to which form,
+// instead of guessing from sheetBaseName string-matching (which broke for
+// legacy sheets whose names don't follow the "base"/"base 2"/"base 3"
+// pattern, e.g. a pre-existing "Responses_1" tab).
+function getFormSheetNames_(formId) {
+  const raw = PropertiesService.getScriptProperties().getProperty(propKey_("CYCLE_SHEETS", formId));
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function addFormSheetName_(formId, name) {
+  const props = PropertiesService.getScriptProperties();
+  const key = propKey_("CYCLE_SHEETS", formId);
+  const names = getFormSheetNames_(formId);
+  if (names.indexOf(name) === -1) {
+    names.push(name);
+    props.setProperty(key, JSON.stringify(names));
+  }
 }
 
 // action=listCycles  (anyone logged in — lets the dashboard switch which
-// sheet/cycle's data it's showing; viewing a cycle only needs viewData)
+// sheet/cycle's data it's showing; viewing a cycle only needs viewData).
+//
+// The default form ("") shows every sheet NOT explicitly claimed by another
+// (non-default) form — this is what makes old, pre-multi-form sheets (e.g.
+// "Responses_1", created before this ownership tracking existed) show up
+// correctly instead of disappearing, since nothing else has claimed them.
+// A specific (non-default) form only ever shows sheets it created itself.
 function handleListCycles_(e) {
   if (!requirePermission_(e.parameter.password || "", "viewData")) {
     return jsonOutput_({ status: "error", message: "Unauthorized" });
   }
-  const cfg = getRegConfig_();
+  const formId = String(e.parameter.form || "").trim();
+  const cfg = getRegConfig_(formId);
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheets = ss.getSheets().map(sh => ({
-    name: sh.getName(),
-    rows: Math.max(0, sh.getLastRow() - 1),
-    isActive: sh.getName() === cfg.activeSheetName,
-  }));
+
+  const claimedByOthers = new Set();
+  listAllForms_(true).forEach(f => {
+    if (f.id === formId) return;
+    getFormSheetNames_(f.id).forEach(n => claimedByOthers.add(n));
+  });
+
+  let names = formId
+    ? getFormSheetNames_(formId)
+    : ss.getSheets().map(s => s.getName()).filter(n => n !== ACTIVITY_LOG_SHEET_NAME && !claimedByOthers.has(n));
+
+  // Safety net: never hide the sheet this form is CURRENTLY writing into,
+  // even if it's somehow missing from the tracked list.
+  if (cfg.activeSheetName && names.indexOf(cfg.activeSheetName) === -1) names.push(cfg.activeSheetName);
+
+  const sheets = names
+    .map(n => ss.getSheetByName(n))
+    .filter(Boolean)
+    .map(sh => ({
+      name: sh.getName(),
+      rows: Math.max(0, sh.getLastRow() - 1),
+      isActive: sh.getName() === cfg.activeSheetName,
+    }));
   return jsonOutput_({ status: "success", sheets, activeSheetName: cfg.activeSheetName });
 }
 
@@ -487,9 +904,10 @@ function handleDiagnostics_(e) {
   try { report.scriptTimeZone = Session.getScriptTimeZone(); }
   catch (err) { report.scriptTimeZone = "خطأ: " + String(err); }
 
-  // 4) Active sheet reachable?
+  // 4) Active sheet reachable? (default form — diagnostics is a global
+  //    health-check; report.otherForms below lists any additional forms)
   try {
-    const cfg = getRegConfig_();
+    const cfg = getRegConfig_("");
     report.activeSheetName = cfg.activeSheetName;
     const sheet = findSheet_(cfg.activeSheetName);
     report.activeSheetFound = !!sheet;
@@ -646,8 +1064,10 @@ function handleSubmit_(payload) {
     return jsonOutput_({ status: "error", message: "Submitted too fast" });
   }
 
+  const formId = String(payload.formId || "").trim();
+
   // ---- 2) is registration currently open? ----
-  const cfg = getRegConfig_();
+  const cfg = getRegConfig_(formId);
   const phase = getRegPhase_(cfg);
   if (phase !== "open") {
     return jsonOutput_({
@@ -658,7 +1078,7 @@ function handleSubmit_(payload) {
   }
 
   // ---- 3) validate every field server-side — never trust the client alone ----
-  const errors = validatePayload_(payload);
+  const errors = validatePayload_(payload, formId);
   if (errors.length) {
     return jsonOutput_({ status: "error", message: errors.join(" | ") });
   }
@@ -670,17 +1090,19 @@ function handleSubmit_(payload) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    if (isDuplicateNid_(nationalId)) {
+    if (isDuplicateNid_(nationalId, formId)) {
       return jsonOutput_({ status: "duplicate" });
     }
 
-    // ---- 5) generate membership number + append the row ----
-    const membershipNo = generateMembershipNumber_();
-    const fc = getFieldConfig_();
+    // ---- 5) generate membership number (or reuse an existing one, if this
+    //         same person already registered before — see
+    //         findExistingMembershipNo_) + append the row ----
+    const membershipNo = findExistingMembershipNo_(nationalId) || generateMembershipNumber_(cfg.membershipPrefix);
+    const fc = getFieldConfig_(formId);
     if (fc.photo && fc.photo.enabled && payload.photoBase64) {
       payload.photoUrl = uploadRegistrationPhoto_(payload.photoBase64);
     }
-    const sheet = getSheet_();
+    const sheet = getSheet_(formId);
     const rowValues = buildRow_(payload, membershipNo);
     sheet.appendRow(rowValues);
     pushToFirestore_(membershipNo, rowValues); // best-effort mirror — never blocks registration
@@ -689,14 +1111,14 @@ function handleSubmit_(payload) {
     let emailSent = false;
     const validEmail = payload.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email.trim());
     if (validEmail) {
-      emailSent = sendConfirmationEmail_(payload, membershipNo);
+      emailSent = sendConfirmationEmail_(payload, membershipNo, cfg);
     }
 
     // ---- 7) certificate email (best-effort, only if auto-send is turned on
     //         from the dashboard AND a certificate template is uploaded) ----
     let certificateSent = false;
     if (validEmail && cfg.sendCertAuto && cfg.certTemplateReady) {
-      certificateSent = sendCertificateEmail_(payload, membershipNo);
+      certificateSent = sendCertificateEmail_(payload, membershipNo, formId);
     }
 
     return jsonOutput_({ status: "success", membershipNo, emailSent, certificateSent });
@@ -710,10 +1132,10 @@ function handleSubmit_(payload) {
 // Validation — mirrors the frontend's validators[] exactly (dys_form.html)
 // ---------------------------------------------------------------------------
 
-function validatePayload_(p) {
+function validatePayload_(p, formId) {
   const errors = [];
   const str = (v) => String(v || "").trim();
-  const fc = getFieldConfig_();
+  const fc = getFieldConfig_(formId);
   const isOn = (key) => fc[key] ? fc[key].enabled : true;
   const isReq = (key) => fc[key] ? fc[key].required : true;
 
@@ -799,8 +1221,19 @@ function validatePayload_(p) {
   });
 
   // Admin-defined custom fields — payload.customFields is {key: value, ...}.
-  getCustomFields_().forEach(cf => {
+  const customFieldsByKey_ = {};
+  const customFieldsList_ = getCustomFields_(formId);
+  customFieldsList_.forEach(cf => { customFieldsByKey_[cf.key] = cf; });
+  customFieldsList_.forEach(cf => {
     if (!cf.enabled) return;
+    // Conditional field (dependsOnKey/dependsOnValue) whose condition isn't
+    // met right now — the form hides it in that case, so it can't be
+    // required either, regardless of what the admin set for `required`.
+    if (cf.dependsOnKey) {
+      const parentDef = customFieldsByKey_[cf.dependsOnKey];
+      const parentVal = parentDef ? str((p.customFields || {})[cf.dependsOnKey]) : "";
+      if (parentVal !== cf.dependsOnValue) return;
+    }
     const v = str((p.customFields || {})[cf.key]);
     if (v === "") {
       if (cf.required) errors.push(cf.key);
@@ -878,27 +1311,165 @@ function isValidEgyptianNationalId_(id) {
 //   ACTIVE_SHEET_NAME   — the tab the form is CURRENTLY writing into
 //   CYCLE_NUMBER        — how many cycles/sheets have been created so far
 //   LOGO_URL/LOGO_FILE_ID — the uploaded logo image, stored in Drive
+//
+// ---------------------------------------------------------------------------
+// Multi-form support ("عدة فورمات في نفس الوقت")
+// ---------------------------------------------------------------------------
+// Everything above is stored under a plain key like "FORM_TITLE". To let
+// several independent registration forms run at the same time from this one
+// backend/spreadsheet (each with its own link, title, dates, fields,
+// success-screen buttons, cycles/sheets, and optional certificate template),
+// every one of those keys gets namespaced per form via propKey_() below —
+// e.g. "FORM_TITLE__f_a1b2c3" instead of "FORM_TITLE".
+//
+// The ORIGINAL, pre-multi-form data is form id "" (empty string) — so an
+// existing deployment with real registrations keeps working with ZERO
+// migration: its old un-namespaced keys ("FORM_TITLE", "ACTIVE_SHEET_NAME",
+// ...) are exactly what formId "" resolves to. dys_form.html with no
+// `?form=` in its URL (the original link) is that same default form.
+//
+// New forms are created from the dashboard's form switcher ("➕ فورم جديد")
+// — see handleAddForm_ — which assigns a short random id and its own
+// sheetBaseName, then everything else (settings, fields, success actions,
+// cycles) is scoped to that id automatically the moment you're managing it.
+const FORMS_REGISTRY_KEY = "FORMS_REGISTRY";
 
-function getRegConfig_() {
+function propKey_(base, formId) {
+  return formId ? `${base}__${formId}` : base;
+}
+
+// Registry of every EXTRA form (beyond the default "" one, which always
+// exists implicitly and is never stored in this list). Each entry:
+// {id, name, createdAt}.
+function getFormsRegistry_() {
+  const raw = PropertiesService.getScriptProperties().getProperty(FORMS_REGISTRY_KEY);
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveFormsRegistry_(forms) {
+  PropertiesService.getScriptProperties().setProperty(FORMS_REGISTRY_KEY, JSON.stringify(forms));
+}
+
+// Full list including the default form, in the shape the dashboard's form
+// switcher needs — default form's name comes from its OWN formTitle setting
+// (falls back to a generic label if it was never given a title).
+// includeArchived=false (the default) hides archived forms — the default
+// form can never be archived, so it's always included.
+function listAllForms_(includeArchived) {
+  const defaultCfg = getRegConfig_("");
+  const defaultEntry = { id: "", name: defaultCfg.formTitle || "الفورم الأساسي", isDefault: true, archived: false };
+  const extra = getFormsRegistry_().map(f => Object.assign({ isDefault: false, archived: false }, f));
+  return [defaultEntry].concat(includeArchived ? extra : extra.filter(f => !f.archived));
+}
+
+// action=listForms (GET, viewData) — anyone logged in can see the list (the
+// dashboard needs it just to populate the "أي فورم" switcher), only
+// manageSettings can actually ADD/ARCHIVE one (see handleAddForm_/
+// handleArchiveForm_ below). ?includeArchived=1 also returns archived forms
+// (used by the "اعرض المؤرشف" checkbox in the dashboard).
+function handleListForms_(e) {
+  if (!requirePermission_(e.parameter.password || "", "viewData")) {
+    return jsonOutput_({ status: "error", message: "Unauthorized" });
+  }
+  const includeArchived = String(e.parameter.includeArchived || "") === "1";
+  return jsonOutput_({ status: "success", forms: listAllForms_(includeArchived) });
+}
+
+// action=addForm — payload: {name}. Creates a brand-new, fully independent
+// form: its own id, its own settings (all defaults until you change them),
+// and its own first sheet/cycle. Nothing about any OTHER form is touched.
+function handleAddForm_(payload) {
+  const name = String(payload.name || "").trim();
+  if (!name) return jsonOutput_({ status: "error", message: "لازم تدي الفورم اسم." });
+
+  const forms = getFormsRegistry_();
+  const id = "f_" + Utilities.getUuid().replace(/-/g, "").slice(0, 8);
+  forms.push({ id, name, createdAt: new Date().toISOString(), archived: false });
+  saveFormsRegistry_(forms);
+
+  // Bootstrap its FIRST sheet/cycle right away — a form with a settings
+  // blob but no sheet yet would break the moment anyone tries to view or
+  // submit to it, so this makes it usable immediately after creation.
+  const sheetBase = name; // admin can rename the sheet base name later from Settings, same as any form
+  startNewCycle_(sheetBase, id);
+
+  return jsonOutput_({ status: "success", form: { id, name, isDefault: false }, config: getRegConfig_(id) });
+}
+
+// action=renameForm — payload: {formId, name}. Only changes the DISPLAY
+// name in the registry / the "formTitle" shown on that form's page — never
+// touches its sheetBaseName or existing sheets/cycles, so nothing about
+// where its data lives changes.
+function handleRenameForm_(payload) {
+  const formId = String(payload.formId || "").trim();
+  const name = String(payload.name || "").trim();
+  if (!name) return jsonOutput_({ status: "error", message: "لازم تدي الفورم اسم." });
+
+  if (!formId) {
+    // Renaming the default form just means changing its formTitle setting.
+    PropertiesService.getScriptProperties().setProperty(propKey_("FORM_TITLE", ""), name);
+    return jsonOutput_({ status: "success", form: { id: "", name, isDefault: true } });
+  }
+  const forms = getFormsRegistry_();
+  const entry = forms.find(f => f.id === formId);
+  if (!entry) return jsonOutput_({ status: "error", message: "الفورم ده مش موجود." });
+  entry.name = name;
+  saveFormsRegistry_(forms);
+  return jsonOutput_({ status: "success", form: { id: formId, name, isDefault: false } });
+}
+
+// action=archiveForm — payload: {formId, archived}. Hides (or unhides) a
+// form from the normal switcher WITHOUT touching its settings, sheets, or
+// any registrant data — the public link and existing data both stay intact,
+// it just stops showing up unless "اعرض المؤرشف" is checked. The default
+// form ("") can never be archived — it's the fallback nothing else has.
+function handleArchiveForm_(payload) {
+  const formId = String(payload.formId || "").trim();
+  if (!formId) return jsonOutput_({ status: "error", message: "الفورم الأساسي مينفعش يتأرشف." });
+
+  const forms = getFormsRegistry_();
+  const entry = forms.find(f => f.id === formId);
+  if (!entry) return jsonOutput_({ status: "error", message: "الفورم ده مش موجود." });
+  entry.archived = payload.archived !== false;
+  saveFormsRegistry_(forms);
+  return jsonOutput_({ status: "success", form: { id: formId, name: entry.name, archived: entry.archived } });
+}
+
+function getRegConfig_(formId) {
   const props = PropertiesService.getScriptProperties();
+  const k = (base) => propKey_(base, formId);
   return {
-    formTitle: props.getProperty("FORM_TITLE") || "",
-    sheetBaseName: props.getProperty("SHEET_BASE_NAME") || SHEET_NAME,
-    startAt: props.getProperty("REG_START") || "",
-    endAt: props.getProperty("REG_END") || "",
-    activeSheetName: props.getProperty("ACTIVE_SHEET_NAME") || SHEET_NAME,
-    cycleNumber: Number(props.getProperty("CYCLE_NUMBER") || "0"),
+    formId: formId || "",
+    formTitle: props.getProperty(k("FORM_TITLE")) || "",
+    sheetBaseName: props.getProperty(k("SHEET_BASE_NAME")) || (formId ? formId : SHEET_NAME),
+    startAt: props.getProperty(k("REG_START")) || "",
+    endAt: props.getProperty(k("REG_END")) || "",
+    activeSheetName: props.getProperty(k("ACTIVE_SHEET_NAME")) || (formId ? formId : SHEET_NAME),
+    cycleNumber: Number(props.getProperty(k("CYCLE_NUMBER")) || "0"),
     logoUrl: (() => {
-      const fileId = props.getProperty("LOGO_FILE_ID");
+      const fileId = props.getProperty(k("LOGO_FILE_ID"));
       return fileId ? logoUrlFromFileId_(fileId) : "";
     })(),
-    sendCertAuto: props.getProperty("CERT_AUTO_SEND") === "true",
-    certTemplateReady: !!props.getProperty("CERT_TEMPLATE_FILE_ID"),
-    certTemplateName: props.getProperty("CERT_TEMPLATE_NAME") || "",
-    fieldConfig: getFieldConfig_(),
+    sendCertAuto: props.getProperty(k("CERT_AUTO_SEND")) === "true",
+    certTemplateReady: !!props.getProperty(k("CERT_TEMPLATE_FILE_ID")),
+    certTemplateName: props.getProperty(k("CERT_TEMPLATE_NAME")) || "",
+    fieldConfig: getFieldConfig_(formId),
     fieldDefs: buildFieldDefsForClient_(),
     fieldSections: FIELD_SECTIONS,
-    customFields: getCustomFields_(),
+    customFields: getCustomFields_(formId),
+    successActions: getSuccessActions_(formId),
+    membershipPrefix: props.getProperty(k("MEMBERSHIP_PREFIX")) || MEMBERSHIP_PREFIX,
+    // Custom confirmation email — falls back to the built-in generic text
+    // (see sendConfirmationEmail_) when a form never set its own.
+    confirmEmailSubject: props.getProperty(k("CONFIRM_EMAIL_SUBJECT")) || "",
+    confirmEmailBody: props.getProperty(k("CONFIRM_EMAIL_BODY")) || "",
+    archived: !!(getFormsRegistry_().find(f => f.id === formId) || {}).archived,
   };
 }
 
@@ -985,7 +1556,12 @@ function describeActionForLog_(payload) {
     case "listAdminAccounts": return "شاف قائمة الحسابات";
     case "addAdminAccount": return `أضاف/عدّل حساب: ${payload.name || ""}`;
     case "removeAdminAccount": return `حذف حساب: ${payload.name || ""}`;
+    case "reviewAccess": return payload.approve ? `وافق على دخول: ${payload.email || ""}` : `رفض دخول: ${payload.email || ""}`;
+    case "updateAccountPermissions": return `عدّل صلاحيات: ${payload.name || ""}`;
     case "exportExcel": return "صدّر البيانات لملف Excel";
+    case "addForm": return `أضاف فورم جديد: ${payload.name || ""}`;
+    case "renameForm": return `غيّر اسم فورم لـ: ${payload.name || ""}`;
+    case "archiveForm": return payload.archived === false ? "ألغى أرشفة فورم" : "أرشف فورم";
     default: return payload.action || "";
   }
 }
@@ -1014,7 +1590,7 @@ function handleGetActivityLog_() {
 // BACKEND_SETUP_STEPS.md if this throws an authorization error.
 function handleExportExcel_(payload) {
   try {
-    const sheetName = String(payload.sheetName || "").trim() || getActiveSheetName_();
+    const sheetName = String(payload.sheetName || "").trim() || getActiveSheetName_(String(payload.formId || "").trim());
     const sheet = findSheet_(sheetName);
     if (!sheet) return jsonOutput_({ status: "error", message: `الشيت "${sheetName}" مش موجود.` });
 
@@ -1068,8 +1644,13 @@ const ACTION_PERMISSIONS = {
   listAdminAccounts: "manageAccounts",
   addAdminAccount: "manageAccounts",
   removeAdminAccount: "manageAccounts",
+  updateAccountPermissions: "manageAccounts",
+  reviewAccess: "manageAccounts",
   exportExcel: "manageSettings",
   getActivityLog: "manageSettings",
+  addForm: "manageSettings",
+  renameForm: "manageSettings",
+  archiveForm: "manageSettings",
 };
 
 function handleAdminAction_(payload) {
@@ -1082,9 +1663,9 @@ function handleAdminAction_(payload) {
   }
   if (payload.action === "saveConfig") return logAndReturn_(account, payload, handleSaveConfig_(payload));
   if (payload.action === "uploadLogo") return logAndReturn_(account, payload, handleUploadLogo_(payload));
-  if (payload.action === "removeLogo") return logAndReturn_(account, payload, handleRemoveLogo_());
+  if (payload.action === "removeLogo") return logAndReturn_(account, payload, handleRemoveLogo_(payload));
   if (payload.action === "uploadCertTemplate") return logAndReturn_(account, payload, handleUploadCertTemplate_(payload));
-  if (payload.action === "removeCertTemplate") return logAndReturn_(account, payload, handleRemoveCertTemplate_());
+  if (payload.action === "removeCertTemplate") return logAndReturn_(account, payload, handleRemoveCertTemplate_(payload));
   if (payload.action === "sendCertificate") return logAndReturn_(account, payload, handleSendCertificate_(payload));
   if (payload.action === "sendCertificatesBulk") return logAndReturn_(account, payload, handleSendCertificatesBulk_(payload));
   if (payload.action === "sendTestCertificate") return logAndReturn_(account, payload, handleSendTestCertificate_(payload));
@@ -1092,8 +1673,13 @@ function handleAdminAction_(payload) {
   if (payload.action === "listAdminAccounts") return handleListAdminAccounts_(); // read-only, not logged — keeps the log focused on actual changes
   if (payload.action === "addAdminAccount") return logAndReturn_(account, payload, handleAddAdminAccount_(payload));
   if (payload.action === "removeAdminAccount") return logAndReturn_(account, payload, handleRemoveAdminAccount_(payload));
+  if (payload.action === "reviewAccess") return logAndReturn_(account, payload, handleDashboardReviewAccess_(payload));
+  if (payload.action === "updateAccountPermissions") return logAndReturn_(account, payload, handleUpdateAccountPermissions_(payload));
   if (payload.action === "exportExcel") return logAndReturn_(account, payload, handleExportExcel_(payload));
   if (payload.action === "getActivityLog") return handleGetActivityLog_(); // read-only, not logged
+  if (payload.action === "addForm") return logAndReturn_(account, payload, handleAddForm_(payload));
+  if (payload.action === "renameForm") return logAndReturn_(account, payload, handleRenameForm_(payload));
+  if (payload.action === "archiveForm") return logAndReturn_(account, payload, handleArchiveForm_(payload));
   return jsonOutput_({ status: "error", message: "Unknown admin action" });
 }
 
@@ -1112,7 +1698,7 @@ function logAndReturn_(account, payload, response) {
 
 // Strips passwords for anything sent back to the dashboard.
 function publicAccount_(a) {
-  return { name: a.name, role: a.role, permissions: a.permissions };
+  return { name: a.name, role: a.role, permissions: a.permissions, email: a.email || "", status: a.status || "approved" };
 }
 
 // action=listAdminAccounts — names + permissions only, NEVER passwords.
@@ -1160,6 +1746,62 @@ function handleRemoveAdminAccount_(payload) {
   return jsonOutput_({ status: "success", accounts: remaining.map(publicAccount_) });
 }
 
+// action=reviewAccess (POST, dashboard-side) — payload: {email, approve}.
+// Same effect as clicking the "قبول"/"رفض" link in the notification email,
+// just from inside "👥 حسابات الدخول" for whoever's already logged in with
+// manageAccounts — handy if the email never arrives or they're already in
+// the dashboard when a request comes in.
+function handleDashboardReviewAccess_(payload) {
+  const email = String(payload.email || "").toLowerCase().trim();
+  const accounts = getRawAdminAccounts_();
+  const idx = accounts.findIndex(a => a.email === email && a.status === "pending");
+  if (idx === -1) return jsonOutput_({ status: "error", message: "الطلب ده مش موجود (يمكن اتراجع أو اتوافق عليه خلاص)." });
+
+  if (payload.approve) {
+    delete accounts[idx].status;
+    delete accounts[idx].approvalToken;
+  } else {
+    accounts.splice(idx, 1);
+  }
+  saveAdminAccounts_(accounts);
+  return jsonOutput_({ status: "success", accounts: getAdminAccounts_().map(publicAccount_) });
+}
+
+// action=updateAccountPermissions — payload: {name, permissions}. Changes
+// an EXISTING account's permissions in place — unlike handleAddAdminAccount_
+// (password accounts only, requires a new password every time), this works
+// for ANY account, password-based or Google-signed-in, and never touches
+// its password/email/other identity fields. This is what the dashboard's
+// inline permission checkboxes next to each account call — no more
+// delete-and-re-add dance to change what a Google account can do.
+function handleUpdateAccountPermissions_(payload) {
+  const name = String(payload.name || "").trim();
+  const accounts = getRawAdminAccounts_();
+  const idx = accounts.findIndex(a => a.name === name);
+  if (idx === -1) {
+    return jsonOutput_({
+      status: "error",
+      message: name === "الحساب الأساسي"
+        ? "\"الحساب الأساسي\" (كلمة السر القديمة) دايمًا معاه كل الصلاحيات ومينفعش يتعدّل."
+        : "الحساب ده مش موجود.",
+    });
+  }
+  if (accounts[idx].status === "pending") {
+    return jsonOutput_({ status: "error", message: "الحساب ده لسه بانتظار الموافقة — وافق عليه الأول." });
+  }
+
+  const current = normalizeAccount_(accounts[idx]).permissions;
+  const newPermissions = sanitizePermissions_(payload.permissions);
+  const managerCountWithoutThis = getAdminAccounts_().filter(a => a.name !== name && a.permissions.manageAccounts).length;
+  if (current.manageAccounts && !newPermissions.manageAccounts && managerCountWithoutThis === 0) {
+    return jsonOutput_({ status: "error", message: "ده آخر حساب معاه صلاحية إدارة الحسابات — مينفعش تشيلها عشان متتقفلش برة النظام." });
+  }
+
+  accounts[idx].permissions = newPermissions;
+  saveAdminAccounts_(accounts);
+  return jsonOutput_({ status: "success", accounts: getAdminAccounts_().map(publicAccount_) });
+}
+
 // Forces an arbitrary incoming permissions object into exactly the shape we
 // trust: every key in PERMISSION_KEYS explicitly true/false, nothing else.
 function sanitizePermissions_(incoming) {
@@ -1177,41 +1819,75 @@ function sanitizePermissions_(incoming) {
 // a previous cycle is ever touched or overwritten.
 function handleSaveConfig_(payload) {
   const props = PropertiesService.getScriptProperties();
+  const formId = String(payload.formId || "").trim();
+  const k = (base) => propKey_(base, formId);
 
   const formTitle = String(payload.formTitle || "").trim();
   const sheetBaseName = String(payload.sheetBaseName || "").trim();
   const startAt = String(payload.startAt || "").trim();
   const endAt = String(payload.endAt || "").trim();
 
-  props.setProperty("FORM_TITLE", formTitle);
-  if (sheetBaseName) props.setProperty("SHEET_BASE_NAME", sheetBaseName);
-  props.setProperty("REG_START", startAt);
-  props.setProperty("REG_END", endAt);
+  props.setProperty(k("FORM_TITLE"), formTitle);
+  if (sheetBaseName) props.setProperty(k("SHEET_BASE_NAME"), sheetBaseName);
+  props.setProperty(k("REG_START"), startAt);
+  props.setProperty(k("REG_END"), endAt);
   // "sendCertAuto" only arrives when the dashboard sends it (see collectConfigPayload
   // in dys_dashboard.html) — if payload doesn't include the key at all we leave the
   // stored value untouched, but the dashboard always sends it explicitly, so this
   // simply mirrors whatever the toggle in Settings was set to.
   if (typeof payload.sendCertAuto !== "undefined") {
-    props.setProperty("CERT_AUTO_SEND", payload.sendCertAuto ? "true" : "false");
+    props.setProperty(k("CERT_AUTO_SEND"), payload.sendCertAuto ? "true" : "false");
   }
 
-  let activeSheetName = props.getProperty("ACTIVE_SHEET_NAME") || "";
+  // Membership number prefix ("بادئة رقم العضوية") — letters/digits only,
+  // 2–8 chars, uppercased. Falls back to the global default (MEMBERSHIP_PREFIX)
+  // if left blank or sent invalid, so a bad value never breaks numbering.
+  if (typeof payload.membershipPrefix !== "undefined") {
+    const cleanedPrefix = String(payload.membershipPrefix || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    props.setProperty(k("MEMBERSHIP_PREFIX"), (cleanedPrefix.length >= 2 && cleanedPrefix.length <= 8) ? cleanedPrefix : "");
+  }
+
+  // Custom confirmation email text — blank means "use the built-in generic
+  // text" (see sendConfirmationEmail_), so an empty string is a valid,
+  // intentional value here, not something to skip.
+  if (typeof payload.confirmEmailSubject !== "undefined") {
+    props.setProperty(k("CONFIRM_EMAIL_SUBJECT"), String(payload.confirmEmailSubject || "").trim());
+  }
+  if (typeof payload.confirmEmailBody !== "undefined") {
+    props.setProperty(k("CONFIRM_EMAIL_BODY"), String(payload.confirmEmailBody || "").trim());
+  }
+
+  // Success-screen buttons ("🎉 خيارات بعد التسجيل"). Only touched when the
+  // dashboard actually sends the key (it always does from the Settings tab
+  // save button — see collectConfigPayload in dys_dashboard.html) — so a
+  // partial/older client calling saveConfig for something else never wipes
+  // this list out.
+  if (Array.isArray(payload.successActions)) {
+    const cleaned = payload.successActions
+      .map(sanitizeSuccessAction_)
+      .filter(Boolean);
+    saveSuccessActions_(cleaned, formId);
+  }
+
+  let activeSheetName = props.getProperty(k("ACTIVE_SHEET_NAME")) || "";
 
   if (payload.startNewCycle || !activeSheetName) {
-    activeSheetName = startNewCycle_(sheetBaseName || props.getProperty("SHEET_BASE_NAME") || SHEET_NAME);
+    activeSheetName = startNewCycle_(sheetBaseName || props.getProperty(k("SHEET_BASE_NAME")) || (formId || SHEET_NAME), formId);
   }
 
-  return jsonOutput_({ status: "success", config: getRegConfig_() });
+  return jsonOutput_({ status: "success", config: getRegConfig_(formId) });
 }
 
 // Creates a new sheet tab named after the base name (first cycle keeps the
 // base name as-is, later cycles get " 2", " 3", ... appended so the name
-// stays readable), sets it as the ACTIVE sheet, and bumps CYCLE_NUMBER.
-function startNewCycle_(base) {
+// stays readable), sets it as the ACTIVE sheet, and bumps CYCLE_NUMBER — all
+// scoped to the given formId (see propKey_ above).
+function startNewCycle_(base, formId) {
   const props = PropertiesService.getScriptProperties();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const k = (b) => propKey_(b, formId);
 
-  let cycle = Number(props.getProperty("CYCLE_NUMBER") || "0") + 1;
+  let cycle = Number(props.getProperty(k("CYCLE_NUMBER")) || "0") + 1;
   let candidate = cycle === 1 ? base : `${base} ${cycle}`;
   while (ss.getSheetByName(candidate)) {
     cycle += 1;
@@ -1222,9 +1898,10 @@ function startNewCycle_(base) {
   sheet.appendRow(HEADERS);
   sheet.setFrozenRows(1);
 
-  props.setProperty("CYCLE_NUMBER", String(cycle));
-  props.setProperty("ACTIVE_SHEET_NAME", candidate);
-  props.setProperty("SHEET_BASE_NAME", base);
+  props.setProperty(k("CYCLE_NUMBER"), String(cycle));
+  props.setProperty(k("ACTIVE_SHEET_NAME"), candidate);
+  props.setProperty(k("SHEET_BASE_NAME"), base);
+  addFormSheetName_(formId, candidate);
 
   return candidate;
 }
@@ -1235,6 +1912,7 @@ function startNewCycle_(base) {
 // any) is trashed so you don't end up with a pile of old images in Drive.
 function handleUploadLogo_(payload) {
   try {
+    const formId = String(payload.formId || "").trim();
     const raw = String(payload.imageBase64 || "");
     const commaIdx = raw.indexOf(",");
     const base64 = commaIdx > -1 && raw.slice(0, commaIdx).indexOf("base64") > -1 ? raw.slice(commaIdx + 1) : raw;
@@ -1243,7 +1921,8 @@ function handleUploadLogo_(payload) {
     const blob = Utilities.newBlob(bytes, mimeType, payload.fileName || "dys-form-logo");
 
     const props = PropertiesService.getScriptProperties();
-    const oldFileId = props.getProperty("LOGO_FILE_ID");
+    const k = (b) => propKey_(b, formId);
+    const oldFileId = props.getProperty(k("LOGO_FILE_ID"));
     if (oldFileId) {
       try { DriveApp.getFileById(oldFileId).setTrashed(true); } catch (e2) { /* already gone — fine */ }
     }
@@ -1252,8 +1931,8 @@ function handleUploadLogo_(payload) {
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
     const fileId = file.getId();
 
-    props.setProperty("LOGO_FILE_ID", fileId);
-    props.deleteProperty("LOGO_URL"); // legacy key — URL is now always derived from LOGO_FILE_ID, see logoUrlFromFileId_()
+    props.setProperty(k("LOGO_FILE_ID"), fileId);
+    props.deleteProperty(k("LOGO_URL")); // legacy key — URL is now always derived from LOGO_FILE_ID, see logoUrlFromFileId_()
 
     return jsonOutput_({ status: "success", logoUrl: logoUrlFromFileId_(fileId) });
   } catch (err) {
@@ -1272,14 +1951,16 @@ function logoUrlFromFileId_(fileId) {
 }
 
 // Removes the custom logo — the form falls back to its built-in badge.
-function handleRemoveLogo_() {
+function handleRemoveLogo_(payload) {
+  const formId = String((payload && payload.formId) || "").trim();
   const props = PropertiesService.getScriptProperties();
-  const oldFileId = props.getProperty("LOGO_FILE_ID");
+  const k = (b) => propKey_(b, formId);
+  const oldFileId = props.getProperty(k("LOGO_FILE_ID"));
   if (oldFileId) {
     try { DriveApp.getFileById(oldFileId).setTrashed(true); } catch (e2) { /* already gone — fine */ }
   }
-  props.deleteProperty("LOGO_FILE_ID");
-  props.deleteProperty("LOGO_URL");
+  props.deleteProperty(k("LOGO_FILE_ID"));
+  props.deleteProperty(k("LOGO_URL"));
   return jsonOutput_({ status: "success" });
 }
 
@@ -1330,6 +2011,7 @@ function handleRemoveLogo_() {
 
 function handleUploadCertTemplate_(payload) {
   try {
+    const formId = String(payload.formId || "").trim();
     const raw = String(payload.fileBase64 || "");
     const commaIdx = raw.indexOf(",");
     const base64 = commaIdx > -1 && raw.slice(0, commaIdx).indexOf("base64") > -1 ? raw.slice(commaIdx + 1) : raw;
@@ -1339,7 +2021,8 @@ function handleUploadCertTemplate_(payload) {
     const blob = Utilities.newBlob(bytes, mimeType, fileName);
 
     const props = PropertiesService.getScriptProperties();
-    const oldFileId = props.getProperty("CERT_TEMPLATE_FILE_ID");
+    const k = (b) => propKey_(b, formId);
+    const oldFileId = props.getProperty(k("CERT_TEMPLATE_FILE_ID"));
 
     // Convert the uploaded .docx straight into a Google Doc so we can fill
     // it in with replaceText() later. Needs the Drive API advanced service.
@@ -1359,8 +2042,8 @@ function handleUploadCertTemplate_(payload) {
       try { DriveApp.getFileById(oldFileId).setTrashed(true); } catch (e2) { /* already gone — fine */ }
     }
 
-    props.setProperty("CERT_TEMPLATE_FILE_ID", converted.id);
-    props.setProperty("CERT_TEMPLATE_NAME", fileName);
+    props.setProperty(k("CERT_TEMPLATE_FILE_ID"), converted.id);
+    props.setProperty(k("CERT_TEMPLATE_NAME"), fileName);
 
     return jsonOutput_({ status: "success", fileName });
   } catch (err) {
@@ -1372,22 +2055,24 @@ function handleUploadCertTemplate_(payload) {
   }
 }
 
-function handleRemoveCertTemplate_() {
+function handleRemoveCertTemplate_(payload) {
+  const formId = String((payload && payload.formId) || "").trim();
   const props = PropertiesService.getScriptProperties();
-  const oldFileId = props.getProperty("CERT_TEMPLATE_FILE_ID");
+  const k = (b) => propKey_(b, formId);
+  const oldFileId = props.getProperty(k("CERT_TEMPLATE_FILE_ID"));
   if (oldFileId) {
     try { DriveApp.getFileById(oldFileId).setTrashed(true); } catch (e2) { /* already gone — fine */ }
   }
-  props.deleteProperty("CERT_TEMPLATE_FILE_ID");
-  props.deleteProperty("CERT_TEMPLATE_NAME");
-  props.setProperty("CERT_AUTO_SEND", "false");
+  props.deleteProperty(k("CERT_TEMPLATE_FILE_ID"));
+  props.deleteProperty(k("CERT_TEMPLATE_NAME"));
+  props.setProperty(k("CERT_AUTO_SEND"), "false");
   return jsonOutput_({ status: "success" });
 }
 
 // Fills the template with the given field values and returns a PDF blob.
 // `fields` keys must match the {{placeholder}} names used in the template.
-function generateCertificatePdf_(fields) {
-  const templateId = PropertiesService.getScriptProperties().getProperty("CERT_TEMPLATE_FILE_ID");
+function generateCertificatePdf_(fields, formId) {
+  const templateId = PropertiesService.getScriptProperties().getProperty(propKey_("CERT_TEMPLATE_FILE_ID", formId));
   if (!templateId) throw new Error("لسه مفيش تيمبلت شهادة متحمل من تبويب الإعدادات.");
 
   const templateFile = DriveApp.getFileById(templateId);
@@ -1496,7 +2181,7 @@ function escapeForReplaceText_(value) {
 // right after a live registration) or a person object built from a sheet
 // row via rowToPerson_() (used for manual/bulk sends) — both shapes carry
 // the same field names, so this works for either.
-function sendCertificateEmailCore_(p, membershipNo) {
+function sendCertificateEmailCore_(p, membershipNo, formId) {
   const email = String(p.email || "").trim();
   if (!email) throw new Error("السجل ده مفيهوش إيميل.");
   const str = (v) => String(v || "").trim();
@@ -1532,7 +2217,7 @@ function sendCertificateEmailCore_(p, membershipNo) {
 
   // Custom fields become {{c_xxxxx}} placeholders — see sanitizeCustomField_.
   const customValues = p.customFields || {};
-  getCustomFields_().forEach(cf => { fields[cf.key] = str(customValues[cf.key]); });
+  getCustomFields_(formId).forEach(cf => { fields[cf.key] = str(customValues[cf.key]); });
 
   // {{qrcode}} and {{photo}} — image placeholders, handled inside
   // generateCertificatePdf_ (NOT regular text substitution). qrPayload is
@@ -1540,25 +2225,24 @@ function sendCertificateEmailCore_(p, membershipNo) {
   fields.qrPayload = `سند شباب الدلتا | ${fields.name} | عضوية ${fields.membershipNo} | ${fields.date}`;
   fields.photoUrl = str(p.photoUrl);
 
-  const pdf = generateCertificatePdf_(fields);
-  MailApp.sendEmail({
-    to: email,
-    subject: "شهادتك — سند شباب الدلتا",
-    body:
-      `أهلًا ${fields.name}،\n\n` +
-      `تحية طيبة، مرفق شهادتك.\n\n` +
-      `تحياتنا،\nفريق سند شباب الدلتا`,
-    attachments: [pdf],
-  });
+  const pdf = generateCertificatePdf_(fields, formId);
+  sendEmail_(
+    email,
+    "شهادتك — سند شباب الدلتا",
+    `أهلًا ${fields.name}،\n\n` +
+    `تحية طيبة، مرفق شهادتك.\n\n` +
+    `تحياتنا،\nفريق سند شباب الدلتا`,
+    { attachments: [pdf] }
+  );
 }
 
 // Best-effort wrapper around sendCertificateEmailCore_() — swallows errors
 // and returns true/false. Use this for batch/automatic sends where one
 // failure shouldn't blow up the whole run and there's no one watching for
 // a detailed error message in the moment.
-function sendCertificateEmail_(p, membershipNo) {
+function sendCertificateEmail_(p, membershipNo, formId) {
   try {
-    sendCertificateEmailCore_(p, membershipNo);
+    sendCertificateEmailCore_(p, membershipNo, formId);
     return true;
   } catch (err) {
     console.error("Certificate email failed:", err);
@@ -1610,7 +2294,8 @@ function rowToPerson_(headers, row) {
 // action=sendCertificate — single certificate, looked up by National ID
 // inside the given (or currently active) sheet/cycle.
 function handleSendCertificate_(payload) {
-  const cfg = getRegConfig_();
+  const formId = String(payload.formId || "").trim();
+  const cfg = getRegConfig_(formId);
   if (!cfg.certTemplateReady) {
     return jsonOutput_({ status: "error", message: "ارفع تيمبلت الشهادة الأول من تبويب الإعدادات." });
   }
@@ -1628,7 +2313,7 @@ function handleSendCertificate_(payload) {
   if (!person.email) return jsonOutput_({ status: "error", message: "السجل ده مفيهوش إيميل." });
 
   try {
-    sendCertificateEmailCore_(person, person.membershipNo);
+    sendCertificateEmailCore_(person, person.membershipNo, formId);
     return jsonOutput_({ status: "success", message: "اترسلت الشهادة ✓" });
   } catch (err) {
     return jsonOutput_({ status: "error", message: "فشل إرسال الشهادة: " + String(err) });
@@ -1639,7 +2324,8 @@ function handleSendCertificate_(payload) {
 // given (or currently active) sheet/cycle. Best-effort per row: one failure
 // doesn't stop the rest.
 function handleSendCertificatesBulk_(payload) {
-  const cfg = getRegConfig_();
+  const formId = String(payload.formId || "").trim();
+  const cfg = getRegConfig_(formId);
   if (!cfg.certTemplateReady) {
     return jsonOutput_({ status: "error", message: "ارفع تيمبلت الشهادة الأول من تبويب الإعدادات." });
   }
@@ -1654,7 +2340,7 @@ function handleSendCertificatesBulk_(payload) {
   rows.forEach(row => {
     const person = rowToPerson_(headers, row);
     if (!person.email) { skippedNoEmail += 1; return; }
-    if (sendCertificateEmail_(person, person.membershipNo)) sent += 1; else failed += 1;
+    if (sendCertificateEmail_(person, person.membershipNo, formId)) sent += 1; else failed += 1;
   });
 
   return jsonOutput_({ status: "success", sent, failed, skippedNoEmail, total: rows.length });
@@ -1665,7 +2351,8 @@ function handleSendCertificatesBulk_(payload) {
 // newly uploaded template's layout/placeholders before trusting it with a
 // real batch.
 function handleSendTestCertificate_(payload) {
-  const cfg = getRegConfig_();
+  const formId = String(payload.formId || "").trim();
+  const cfg = getRegConfig_(formId);
   if (!cfg.certTemplateReady) {
     return jsonOutput_({ status: "error", message: "ارفع تيمبلت الشهادة الأول من تبويب الإعدادات." });
   }
@@ -1681,7 +2368,7 @@ function handleSendTestCertificate_(payload) {
     nationalId: "00000000000000",
   };
   try {
-    sendCertificateEmailCore_(sample, "DYS-000000");
+    sendCertificateEmailCore_(sample, "DYS-000000", formId);
     return jsonOutput_({ status: "success", message: "اترسلت شهادة تجريبية ✓ — روح شوف إيميلك." });
   } catch (err) {
     return jsonOutput_({ status: "error", message: "فشل إرسال الشهادة التجريبية: " + String(err) });
@@ -1693,8 +2380,8 @@ function handleSendTestCertificate_(payload) {
 // Sheet helpers
 // ---------------------------------------------------------------------------
 
-function getActiveSheetName_() {
-  return PropertiesService.getScriptProperties().getProperty("ACTIVE_SHEET_NAME") || SHEET_NAME;
+function getActiveSheetName_(formId) {
+  return PropertiesService.getScriptProperties().getProperty(propKey_("ACTIVE_SHEET_NAME", formId)) || (formId || SHEET_NAME);
 }
 
 // Looks up a sheet WITHOUT creating it. Used anywhere we must never silently
@@ -1703,13 +2390,13 @@ function findSheet_(name) {
   return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
 }
 
-// Gets (and creates, if missing) the CURRENT active sheet — i.e. the one
-// this registration cycle is writing into. On a fresh install, this is what
-// bootstraps ACTIVE_SHEET_NAME/SHEET_BASE_NAME the very first time, so old
-// deployments that never touch the new Settings tab keep behaving exactly
-// like before.
-function getSheet_(nameOpt) {
-  const name = nameOpt || getActiveSheetName_();
+// Gets (and creates, if missing) the CURRENT active sheet for the given form
+// — i.e. the one THAT form's registration cycle is writing into. On a fresh
+// install (formId ""), this is what bootstraps ACTIVE_SHEET_NAME/
+// SHEET_BASE_NAME the very first time, so old deployments that never touch
+// the new Settings tab keep behaving exactly like before.
+function getSheet_(formId, nameOpt) {
+  const name = nameOpt || getActiveSheetName_(formId);
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(name);
   if (!sheet) {
@@ -1718,8 +2405,10 @@ function getSheet_(nameOpt) {
     sheet.setFrozenRows(1);
 
     const props = PropertiesService.getScriptProperties();
-    if (!props.getProperty("ACTIVE_SHEET_NAME")) props.setProperty("ACTIVE_SHEET_NAME", name);
-    if (!props.getProperty("SHEET_BASE_NAME")) props.setProperty("SHEET_BASE_NAME", name);
+    const k = (b) => propKey_(b, formId);
+    if (!props.getProperty(k("ACTIVE_SHEET_NAME"))) props.setProperty(k("ACTIVE_SHEET_NAME"), name);
+    if (!props.getProperty(k("SHEET_BASE_NAME"))) props.setProperty(k("SHEET_BASE_NAME"), name);
+    addFormSheetName_(formId, name);
   } else {
     healSheetHeaders_(sheet);
   }
@@ -1767,8 +2456,8 @@ function buildRow_(p, membershipNo) {
   return legacyRow.concat(extraRow).concat([customJson]).concat([str(p.photoUrl), str(p.videoUrl)]);
 }
 
-function isDuplicateNid_(nationalId) {
-  const sheet = getSheet_();
+function isDuplicateNid_(nationalId, formId) {
+  const sheet = getSheet_(formId);
   const data = sheet.getDataRange().getValues();
   const headers = data[0] || [];
   const nidCol = headers.indexOf("National ID");
@@ -1796,10 +2485,14 @@ function isDuplicateNid_(nationalId) {
 // clean scan.
 function extractMembershipNo_(raw) {
   const s = String(raw || "").toUpperCase();
-  const m = s.match(new RegExp(MEMBERSHIP_PREFIX + "-\\d+"));
+  // Prefix-agnostic on purpose — different forms can have different
+  // membership prefixes (see cfg.membershipPrefix / MEMBERSHIP_PREFIX
+  // default), and check-in doesn't necessarily know in advance which form a
+  // given code belongs to.
+  const m = s.match(/[A-Z]+-\d+/);
   if (m) return m[0];
   // Fallback: bare digits typed by hand, e.g. "456" or "000456" — pad it out
-  // to match the real format instead of failing to find a match.
+  // to match the default prefix's format instead of failing to find a match.
   const digits = s.match(/\d+/);
   if (digits) return `${MEMBERSHIP_PREFIX}-${digits[0].padStart(6, "0")}`;
   return "";
@@ -1816,16 +2509,32 @@ function rowToMember_(headers, row) {
   };
 }
 
-function findMemberRowInAllCycles_(code) {
+// formId "" (or omitted) searches every sheet across every form, same as
+// before multi-form support existed. A specific formId restricts the search
+// to only that form's own sheets/cycles (matched the same way
+// handleListCycles_ matches them — by sheetBaseName).
+function findMemberRowInAllCycles_(code, formId) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  // Check the active cycle first (the common case — an event usually checks
-  // in against whichever cycle is currently running), then fall back to
-  // scanning every other sheet so a QR from an older cycle still resolves.
-  const activeName = getActiveSheetName_();
-  const sheetNames = [activeName].concat(
-    ss.getSheets().map(s => s.getName()).filter(n => n !== activeName && n !== ACTIVITY_LOG_SHEET_NAME)
-  );
-  for (const name of sheetNames) {
+  const cfg = getRegConfig_(formId || "");
+  const activeName = cfg.activeSheetName;
+
+  let candidateNames;
+  if (formId) {
+    const base = cfg.sheetBaseName;
+    candidateNames = [activeName].concat(
+      ss.getSheets().map(s => s.getName())
+        .filter(n => n !== activeName && (n === base || n.indexOf(base + " ") === 0))
+    );
+  } else {
+    // Check the active cycle first (the common case — an event usually checks
+    // in against whichever cycle is currently running), then fall back to
+    // scanning every other sheet so a QR from an older cycle still resolves.
+    candidateNames = [activeName].concat(
+      ss.getSheets().map(s => s.getName()).filter(n => n !== activeName && n !== ACTIVITY_LOG_SHEET_NAME)
+    );
+  }
+
+  for (const name of candidateNames) {
     const sheet = ss.getSheetByName(name);
     if (!sheet) continue;
     const data = sheet.getDataRange().getValues();
@@ -1853,7 +2562,7 @@ function handleVerifyMember_(e) {
   const code = extractMembershipNo_(e.parameter.code || "");
   if (!code) return jsonOutput_({ status: "error", message: "الكود مش مفهوم" });
 
-  const found = findMemberRowInAllCycles_(code);
+  const found = findMemberRowInAllCycles_(code, String(e.parameter.form || "").trim());
   if (!found) return jsonOutput_({ status: "not_found" });
 
   const chkCol = found.headers.indexOf("Checked In At");
@@ -1865,10 +2574,12 @@ function handleVerifyMember_(e) {
   });
 }
 
-// action=checkin (POST) — payload: {password, code}. Marks the member as
-// arrived RIGHT NOW, unless they're already checked in (returns their
-// original check-in time instead of overwriting it — scanning someone
-// twice by accident should never look like an error, just a heads-up).
+// action=checkin (POST) — payload: {password, code, formId}. Marks the
+// member as arrived RIGHT NOW, unless they're already checked in (returns
+// their original check-in time instead of overwriting it — scanning
+// someone twice by accident should never look like an error, just a
+// heads-up). formId "" (or omitted) checks every form's data, same as
+// before multi-form support existed.
 function handleCheckin_(payload) {
   const account = requirePermission_(payload.password || "", "viewData");
   if (!account) return jsonOutput_({ status: "error", message: "Unauthorized" });
@@ -1876,7 +2587,7 @@ function handleCheckin_(payload) {
   const code = extractMembershipNo_(payload.code || "");
   if (!code) return jsonOutput_({ status: "error", message: "الكود مش مفهوم" });
 
-  const found = findMemberRowInAllCycles_(code);
+  const found = findMemberRowInAllCycles_(code, String(payload.formId || "").trim());
   if (!found) return jsonOutput_({ status: "not_found" });
 
   const { sheet, headers, rowIndex, row } = found;
@@ -1912,13 +2623,52 @@ function handleCheckin_(payload) {
 // bootstraps the counter from however many rows already exist in the active
 // sheet, so numbering picks up naturally even if you're migrating from an
 // older sheet.
-function generateMembershipNumber_() {
+//
+// `prefix` defaults to MEMBERSHIP_PREFIX ("DYS") — a form can use its own
+// prefix instead (see cfg.membershipPrefix / the "بادئة رقم العضوية" field
+// in Settings) so e.g. "HR-000045" and "DYS-000045" can coexist without
+// colliding; each prefix keeps its own independent counter.
+// Looks across EVERY sheet in the whole spreadsheet (every form, every
+// cycle) for a row already carrying this National ID, and returns that
+// row's Membership No if found — so the SAME person registering again
+// through a DIFFERENT form (or a new cycle of the same form) keeps their
+// existing membership number instead of getting a brand-new one each time.
+// (isDuplicateNid_ is a separate, narrower check — it only blocks
+// re-registering a SECOND time within the same form's CURRENT active
+// sheet; this function is what makes an ID persistent ACROSS forms.)
+function findExistingMembershipNo_(nationalId) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = ss.getSheets().filter(sh => sh.getName() !== ACTIVITY_LOG_SHEET_NAME);
+
+  for (const sh of sheets) {
+    const lastRow = sh.getLastRow();
+    const lastCol = sh.getLastColumn();
+    if (lastRow < 2 || lastCol < 1) continue;
+
+    const headerRow = sh.getRange(1, 1, 1, lastCol).getValues()[0];
+    const nidCol = headerRow.indexOf("National ID");
+    const msCol = headerRow.indexOf("Membership No");
+    if (nidCol === -1 || msCol === -1) continue;
+
+    const values = sh.getRange(2, 1, lastRow - 1, lastCol).getValues();
+    for (const row of values) {
+      if (String(row[nidCol]).trim() === nationalId) {
+        const existing = String(row[msCol] || "").trim();
+        if (existing) return existing;
+      }
+    }
+  }
+  return null;
+}
+
+function generateMembershipNumber_(prefix) {
+  const usePrefix = (prefix || MEMBERSHIP_PREFIX).toUpperCase();
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
     const used = new Set();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const numRe = new RegExp("^" + MEMBERSHIP_PREFIX + "-(\\d+)$");
+    const numRe = new RegExp("^" + usePrefix + "-(\\d+)$");
 
     ss.getSheets().forEach(sh => {
       const lastRow = sh.getLastRow();
@@ -1938,7 +2688,7 @@ function generateMembershipNumber_() {
 
     let counter = 1;
     while (used.has(counter)) counter += 1;
-    return `${MEMBERSHIP_PREFIX}-${String(counter).padStart(6, "0")}`;
+    return `${usePrefix}-${String(counter).padStart(6, "0")}`;
   } finally {
     lock.releaseLock();
   }
@@ -1949,16 +2699,23 @@ function generateMembershipNumber_() {
 // Email
 // ---------------------------------------------------------------------------
 
-function sendConfirmationEmail_(p, membershipNo) {
+// Uses the form's own custom subject/body if it set one (Settings ▸ نص
+// إيميل التأكيد), with {{name}} and {{membershipNo}} placeholders — falls
+// back to the built-in generic Arabic text otherwise.
+function sendConfirmationEmail_(p, membershipNo, cfg) {
   try {
-    const subject = "تأكيد التسجيل — سند شباب الدلتا";
-    const body =
-      `أهلًا ${p.name}،\n\n` +
-      `شكرًا لتسجيلك في سند شباب الدلتا.\n` +
-      `رقم عضويتك هو: ${membershipNo}\n\n` +
-      `هيتم التواصل معاك قريبًا من فريق اللجنة.\n\n` +
-      `تحياتنا،\nفريق سند شباب الدلتا`;
-    MailApp.sendEmail(p.email.trim(), subject, body);
+    const fill = (s) => s.replace(/\{\{name\}\}/g, p.name || "").replace(/\{\{membershipNo\}\}/g, membershipNo || "");
+    const subject = (cfg && cfg.confirmEmailSubject)
+      ? fill(cfg.confirmEmailSubject)
+      : "تأكيد التسجيل — سند شباب الدلتا";
+    const body = (cfg && cfg.confirmEmailBody)
+      ? fill(cfg.confirmEmailBody)
+      : `أهلًا ${p.name}،\n\n` +
+        `شكرًا لتسجيلك في سند شباب الدلتا.\n` +
+        `رقم عضويتك هو: ${membershipNo}\n\n` +
+        `هيتم التواصل معاك قريبًا من فريق اللجنة.\n\n` +
+        `تحياتنا،\nفريق سند شباب الدلتا`;
+    sendEmail_(p.email.trim(), subject, body);
     return true;
   } catch (err) {
     console.error("Email send failed:", err);
@@ -2023,13 +2780,19 @@ function roleLabelFromPermissions_(permissions) {
   return "custom";
 }
 
+function getRawAdminAccounts_() {
+  const raw = PropertiesService.getScriptProperties().getProperty("ADMIN_ACCOUNTS");
+  try {
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
 function getAdminAccounts_() {
   const props = PropertiesService.getScriptProperties();
-  const raw = props.getProperty("ADMIN_ACCOUNTS");
-  let accounts = [];
-  if (raw) {
-    try { accounts = JSON.parse(raw); } catch (e) { accounts = []; }
-  }
+  let accounts = getRawAdminAccounts_();
   const legacy = props.getProperty("ADMIN_PASSWORD");
   if (legacy && !accounts.some(a => a.password === legacy)) {
     accounts = [{ name: "الحساب الأساسي", password: legacy, role: "owner" }].concat(accounts);
@@ -2042,9 +2805,21 @@ function saveAdminAccounts_(accounts) {
 }
 
 // Returns the matching account ({name, password, permissions, role}) or null.
-function authenticate_(password) {
-  if (!password) return null;
-  return getAdminAccounts_().find(a => a.password === password) || null;
+// Tries a Google-signed-in SESSION TOKEN first (see issueSession_ below),
+// then falls back to a plain legacy password match — so both auth methods
+// work through the exact same code path everywhere else in this file (every
+// handler just calls requirePermission_(payload.password, ...) and neither
+// knows nor cares which kind of credential it actually got).
+function authenticate_(passwordOrToken) {
+  if (!passwordOrToken) return null;
+
+  const session = getSession_(passwordOrToken);
+  if (session) {
+    const account = getAdminAccounts_().find(a => a.email && a.email === session.email && a.status !== "pending");
+    return account || null; // account may have been removed/un-approved since the session was issued
+  }
+
+  return getAdminAccounts_().find(a => a.password && a.password === passwordOrToken) || null;
 }
 
 // Central gate for every password-protected endpoint. `permission` is one of
@@ -2062,6 +2837,163 @@ function requirePermission_(password, permission) {
     return null;
   }
   return account;
+}
+
+// ---------------------------------------------------------------------------
+// Google Sign-In — session tokens + the sign-in/approval flow
+// ---------------------------------------------------------------------------
+// Sessions are stored server-side (Script Properties, pruned of expired
+// entries on every new sign-in) rather than as a JWT the client could
+// tamper with — the token itself is just an opaque random string that means
+// nothing outside this lookup.
+const SESSIONS_KEY = "GOOGLE_SESSIONS";
+
+function getSession_(token) {
+  const raw = PropertiesService.getScriptProperties().getProperty(SESSIONS_KEY);
+  let sessions = {};
+  try { sessions = raw ? JSON.parse(raw) : {}; } catch (e) { sessions = {}; }
+  const s = sessions[token];
+  if (!s || s.expiresAt < Date.now()) return null;
+  return s;
+}
+
+function issueSession_(email) {
+  const props = PropertiesService.getScriptProperties();
+  const raw = props.getProperty(SESSIONS_KEY);
+  let sessions = {};
+  try { sessions = raw ? JSON.parse(raw) : {}; } catch (e) { sessions = {}; }
+
+  const now = Date.now();
+  Object.keys(sessions).forEach(t => { if (sessions[t].expiresAt < now) delete sessions[t]; });
+
+  const token = Utilities.getUuid().replace(/-/g, "") + Utilities.getUuid().replace(/-/g, "");
+  sessions[token] = { email, expiresAt: now + SESSION_TTL_MS };
+  props.setProperty(SESSIONS_KEY, JSON.stringify(sessions));
+  return token;
+}
+
+// Verifies a Google ID token the RIGHT way for Apps Script (no JWT library
+// needed): Google's own tokeninfo endpoint checks the cryptographic
+// signature server-side and hands back the decoded claims. We still check
+// `aud` ourselves (that the token was actually issued for THIS app's Client
+// ID, not some other Google Sign-In button elsewhere) and `email_verified`.
+function verifyGoogleIdToken_(idToken) {
+  if (!idToken) return null;
+  try {
+    const res = UrlFetchApp.fetch(
+      "https://oauth2.googleapis.com/tokeninfo?id_token=" + encodeURIComponent(idToken),
+      { muteHttpExceptions: true }
+    );
+    if (res.getResponseCode() !== 200) return null;
+    const data = JSON.parse(res.getContentText());
+    if (data.aud !== GOOGLE_CLIENT_ID) return null;
+    if (data.email_verified !== "true" && data.email_verified !== true) return null;
+    if (Number(data.exp) * 1000 < Date.now()) return null;
+    const email = String(data.email || "").toLowerCase().trim();
+    if (!email) return null;
+    return { email, name: data.name || email };
+  } catch (e) {
+    return null;
+  }
+}
+
+// action=googleLogin (POST) — payload: {idToken}. Three possible outcomes:
+//   1. Known + approved email → issue a session token, log them straight in.
+//   2. Known but still pending → tell them to wait (no repeat email spam).
+//   3. Never seen before → create a pending account + email everyone who can
+//      approve new access (manageAccounts), so THEY approve/reject with one
+//      tap from their inbox (see handleApproveAccess_/handleRejectAccess_).
+function handleGoogleLogin_(payload) {
+  const info = verifyGoogleIdToken_(payload.idToken);
+  if (!info) return jsonOutput_({ status: "error", message: "فشل التحقق من حساب جوجل — جرب تاني." });
+
+  const accounts = getRawAdminAccounts_();
+  const existing = accounts.find(a => a.email === info.email);
+
+  if (existing && existing.status !== "pending") {
+    const account = normalizeAccount_(existing);
+    const token = issueSession_(info.email);
+    return jsonOutput_({
+      status: "success",
+      sessionToken: token,
+      account: { name: account.name, email: account.email, permissions: account.permissions },
+    });
+  }
+
+  if (!existing) {
+    const approvalToken = Utilities.getUuid().replace(/-/g, "");
+    accounts.push({
+      name: info.name,
+      email: info.email,
+      status: "pending",
+      permissions: {},
+      requestedAt: new Date().toISOString(),
+      approvalToken,
+    });
+    saveAdminAccounts_(accounts);
+    notifyApprovers_(info, approvalToken);
+  }
+  // else: already pending from an earlier attempt — don't re-send the email
+  // every time they retry signing in.
+
+  return jsonOutput_({ status: "pending", message: "طلبك اتبعت لصاحب صلاحية إدارة الحسابات — هتقدر تدخل أول ما يوافق عليك." });
+}
+
+// Emails everyone who currently holds "manageAccounts" (only THEY can grant
+// new access) with one-tap approve/reject links. Password-only legacy
+// accounts have no email on file and are silently skipped here — they can
+// still approve from the dashboard's "👥 حسابات الدخول" card itself.
+function notifyApprovers_(info, approvalToken) {
+  const approvers = getAdminAccounts_().filter(a => a.email && a.status !== "pending" && a.permissions.manageAccounts);
+  if (!approvers.length) return; // nobody CAN approve by email — dashboard-side approval still works
+
+  const base = ScriptApp.getService().getUrl();
+  const approveUrl = `${base}?action=approveAccess&email=${encodeURIComponent(info.email)}&token=${encodeURIComponent(approvalToken)}`;
+  const rejectUrl = `${base}?action=rejectAccess&email=${encodeURIComponent(info.email)}&token=${encodeURIComponent(approvalToken)}`;
+
+  const subject = `طلب دخول جديد للوحة تحكم سند شباب الدلتا — ${info.name}`;
+  const body =
+    `فيه حد طلب يدخل لوحة التحكم بحساب جوجل بتاعه:\n\n` +
+    `الاسم: ${info.name}\n` +
+    `الإيميل: ${info.email}\n\n` +
+    `لو عايز توافق: ${approveUrl}\n\n` +
+    `لو مش عايز: ${rejectUrl}\n\n` +
+    `(الموافقة بتديله دخول بس من غير أي صلاحيات — تقدر تظبطلها بالظبط بعد كده من "👥 حسابات الدخول" في الإعدادات.)`;
+
+  approvers.forEach(a => {
+    try { sendEmail_(a.email, subject, body); } catch (e) { /* one bad address shouldn't block the others */ }
+  });
+}
+
+// action=approveAccess / action=rejectAccess (GET, clicked from the email —
+// NOT a JSON endpoint, since a human opens this straight from their inbox).
+// Secured by the per-request approvalToken (not by password), matched
+// against the exact pending record — a stale or reused link just fails
+// quietly with a plain confirmation page either way.
+function handleReviewAccess_(e, approve) {
+  const email = String(e.parameter.email || "").toLowerCase().trim();
+  const token = String(e.parameter.token || "").trim();
+  const accounts = getRawAdminAccounts_();
+  const idx = accounts.findIndex(a => a.email === email && a.status === "pending" && a.approvalToken === token);
+
+  let message;
+  if (idx === -1) {
+    message = "اللينك ده مش شغال — يمكن الطلب اتراجع خلاص، أو اللينك قديم.";
+  } else if (approve) {
+    delete accounts[idx].status;
+    delete accounts[idx].approvalToken;
+    saveAdminAccounts_(accounts);
+    message = `تمت الموافقة على دخول ${accounts[idx].name || email} ✓ — دلوقتي روح "👥 حسابات الدخول" في الإعدادات وحدد الصلاحيات المناسبة له.`;
+  } else {
+    accounts.splice(idx, 1);
+    saveAdminAccounts_(accounts);
+    message = `اترفض طلب الدخول بتاع ${email}.`;
+  }
+
+  return HtmlService.createHtmlOutput(
+    `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;max-width:480px;margin:60px auto;padding:24px;border:1px solid #ddd;border-radius:12px;text-align:center;">` +
+    `<h2 style="color:#16321f;">سند شباب الدلتا</h2><p style="font-size:15px;color:#333;">${message}</p></div>`
+  );
 }
 
 // Run this ONCE from the Apps Script editor (select it in the function
@@ -2083,7 +3015,7 @@ function setAdminPassword() {
 // Creates the sheet + header row if it doesn't exist yet. Safe to run
 // multiple times — it does nothing if the sheet is already there.
 function setupSheet() {
-  const sheet = getSheet_();
+  const sheet = getSheet_("");
   Logger.log(`Sheet "${sheet.getName()}" is ready.`);
 }
 
@@ -2091,7 +3023,7 @@ function setupSheet() {
 // expects, and logs any mismatches. Run this BEFORE going live if you're
 // pointing this script at a sheet that already has real data in it.
 function checkHeaders() {
-  const sheet = getSheet_();
+  const sheet = getSheet_("");
   const actual = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), HEADERS.length)).getValues()[0];
 
   Logger.log("Sheet checked:    " + sheet.getName());
