@@ -97,8 +97,8 @@ function sendEmail_(to, subject, body, extraOptions) {
 // so it's optional). Leave either/both placeholders as-is to skip that
 // provider entirely — the chat still works with just one, or falls back to
 // "use the quick questions instead" if neither is set.
-const GEMINI_API_KEY = "PASTE_YOUR_GEMINI_API_KEY_HERE";
-const GROK_API_KEY = "PASTE_YOUR_GROK_API_KEY_HERE";
+const GEMINI_API_KEY = "AQ.Ab8RN6JHY6laQxjm-W-_q3-PthfhbDrTfvY9dFth6cOJiwUD8g";
+const GROK_API_KEY = "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";
 
 // Simple daily message cap (shared across all forms) so a misconfigured
 // widget or a bored visitor can't run up an unexpected API bill overnight.
@@ -604,7 +604,7 @@ function callGemini_(systemPrompt, userMessage, history) {
     const contents = (history || []).map(h => ({ role: h.role === "user" ? "user" : "model", parts: [{ text: h.text }] }));
     contents.push({ role: "user", parts: [{ text: userMessage }] });
     const res = UrlFetchApp.fetch(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=" + GEMINI_API_KEY,
       {
         method: "post",
         contentType: "application/json",
@@ -612,7 +612,15 @@ function callGemini_(systemPrompt, userMessage, history) {
         payload: JSON.stringify({
           systemInstruction: { parts: [{ text: systemPrompt }] },
           contents,
-          generationConfig: { temperature: 0.4, maxOutputTokens: 400 },
+          // gemini-3.5-flash-lite is the fast/cheap Gemini 3.x tier and has
+          // thinking OFF by default (unlike 3.6 Flash, which thinks by
+          // default and burns part of maxOutputTokens on it). That's exactly
+          // right for short FAQ/stats replies, so no thinkingConfig needed —
+          // just leave it at its default for max speed.
+          generationConfig: {
+            temperature: 0.4,
+            maxOutputTokens: 600,
+          },
         }),
       }
     );
@@ -684,9 +692,18 @@ function buildFormAiPrompt_(cfg) {
   );
 }
 
-// Builds the ADMIN-facing widget's "brain" — only AGGREGATE stats (counts/
-// percentages), never individual registrant rows or any PII (names,
-// national IDs, phone numbers, emails are never sent to the AI provider).
+// The actual "how do I..." steps the AI is allowed to hand back verbatim —
+// kept here (not invented by the model) so answers match the real UI.
+// Update this alongside any dashboard UI changes.
+const DASHBOARD_HOWTO_GUIDE =
+  `- إزاي أرفع شعار للفورم؟ روح تبويب "⚙️ الإعدادات" ▸ كارت "صورة الاستمارة (الشعار)" ▸ دوس اختار ملف صورة من جهازك ▸ دوس زرار "رفع الصورة". لو عايز ترجع للشعار الافتراضي، دوس "استخدام الشعار الافتراضي" جنبه.\n` +
+  `- إزاي أضيف فورم جديد؟ فوق الصفحة جنب اختيار الفورم الحالي، دوس زرار "➕ فورم جديد"، هيطلب منك اسم الفورم واكتبه ودوس موافق — الفورم الجديد هيبقى له لينك وإعدادات وشيت منفصلين تمامًا عن أي فورم تاني.\n` +
+  `- إزاي أوافق على حساب جوجل جديد؟ روح تبويب "⚙️ الإعدادات" ▸ كارت "👥 حسابات الدخول" ▸ هتلاقي أي طلب دخول جديد ظاهر بعلامة "(بانتظار الموافقة)" في الجدول ▸ جنبه زرار موافقة ورفض، دوس "موافقة" وحدد له الصلاحيات المناسبة (إعدادات عامة / حقول الاستمارة / الشهادات / إدارة الحسابات) وبعدين احفظ. (بديل: لو معاه إيميل مسجل كـ admin بصلاحية "إدارة الحسابات"، بيوصله إيميل فيه لينك موافقة/رفض مباشر).\n` +
+  `- إزاي أغيّر إعدادات عامة (العنوان، ميعاد التسجيل، الدورات)؟ تبويب "⚙️ الإعدادات" ▸ أول كارت في الصفحة ▸ عدّل الحقول ودوس "حفظ الإعدادات".\n` +
+  `- إزاي أضيف/أشيل حقول من الفورم؟ تبويب "⚙️ الإعدادات" ▸ كارت "🧩 حقول الاستمارة" ▸ فعّل/عطّل أو اجعل الحقل إجباري من هناك.\n` +
+  `- إزاي أبعت الشهادات؟ تبويب "⚙️ الإعدادات" ▸ كارت الشهادات ▸ ارفع تيمبلت الشهادة (docx) ▸ ابعت شهادة تجريبية للتأكد ▸ بعدين ابعت الشهادات فعليًا (تلقائي أو دفعة واحدة حسب الإعداد).\n` +
+  `- إزاي أعمل تشخيص لو حاجة مش شغالة (زي الإيميلات)؟ تبويب "⚙️ الإعدادات" ▸ زرار "🩺 تشخيص" بيوريك تقرير كامل (حالة الإيميل، الصلاحيات، الربط بجوجل درايف...).`;
+
 function buildDashboardAiPrompt_(cfg, stats) {
   return (
     `انت مساعد بيساعد الأدمن (مسؤول لوحة تحكم سند شباب الدلتا) يفهم بيانات ولوحة تحكم فورم "${cfg.formTitle || "بدون عنوان"}" ` +
@@ -698,11 +715,13 @@ function buildDashboardAiPrompt_(cfg, stats) {
     `- نسبة اللي بيشتغلوا حاليًا: ${stats.employedPct}%\n` +
     `- تسجيلات آخر 7 أيام: ${stats.last7Days}\n` +
     `- أكتر 3 صفات/كليات تكرارًا: ${stats.topBreakdown}\n\n` +
+    `دليل استخدام الداشبورد (المصدر الوحيد اللي تقدر تجاوب منه على أسئلة "إزاي أعمل كذا" — استخدم نفس الخطوات دي بالظبط، متخترعش خطوات تانية):\n` +
+    DASHBOARD_HOWTO_GUIDE + `\n\n` +
     `تعليمات مهمة:\n` +
     `- رد بالعربي العامي المصري، بإيجاز.\n` +
     `- استخدم الأرقام دي بس للإجابة عن أسئلة إحصائية — ماعندكش وصول لأي بيانات شخصية لأي مسجل (اسم، رقم قومي، تليفون، إيميل) خالص، فلو سأل عن حد بعينه وضّح إنه يشوف الجدول نفسه في تبويب "📋 الجدول".\n` +
-    `- لو سأل "إزاي أعمل كذا" في الداشبورد (زي رفع شعار، تغيير الإعدادات، إضافة فورم)، ساعده باختصار بالخطوات.\n` +
-    `- ماتخترعش أرقام أو معلومات مش معطاة لك.`
+    `- لو سأل "إزاي أعمل كذا" وموجود في دليل الاستخدام فوق، جاوب بنفس خطواته بالظبط. لو مش موجود في الدليل، قول بصراحة إنك مش متأكد من الخطوة دي واقترح إنه يدوّر في تبويب "⚙️ الإعدادات" أو يسأل فريق التقنية.\n` +
+    `- ماتخترعش أرقام أو معلومات أو خطوات مش معطاة لك.`
   );
 }
 
@@ -3088,4 +3107,36 @@ function jsonOutput_(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+
+function testEmailNow() {
+  try {
+    GmailApp.sendEmail("ymahrous05@gmail.com", "اختبار", "ده اختبار إرسال");
+    Logger.log("تم الإرسال بنجاح");
+  } catch (err) {
+    Logger.log("فشل الإرسال: " + err);
+  }
+}
+
+function checkAiQuotaNow() {
+  const props = PropertiesService.getScriptProperties();
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
+  Logger.log("العدد المستخدم النهاردة: " + props.getProperty("AI_QUOTA_" + today));
+}
+
+function testGeminiNow() {
+  const res = UrlFetchApp.fetch(
+       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=" + GEMINI_API_KEY,
+    {
+      method: "post",
+      contentType: "application/json",
+      muteHttpExceptions: true,
+      payload: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: "قول أهلاً" }] }],
+      }),
+    }
+  );
+  Logger.log("Status: " + res.getResponseCode());
+  Logger.log("Body: " + res.getContentText());
 }
