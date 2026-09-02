@@ -1123,12 +1123,223 @@
         padding: 30px;
       }
     }
+
+    /* ---------- AI chat assistant (helps members while they register) ---------- */
+    .ai-chat-bubble {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--dys-green), var(--dys-green-dark));
+      color: #fff;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .3);
+      cursor: pointer;
+      z-index: 998;
+      border: none;
+      transition: transform .2s ease;
+    }
+
+    .ai-chat-bubble.visible {
+      display: flex;
+    }
+
+    .ai-chat-bubble:active {
+      transform: scale(.92);
+    }
+
+    .ai-chat-panel {
+      position: fixed;
+      bottom: 90px;
+      left: 20px;
+      width: min(360px, calc(100vw - 32px));
+      max-height: min(520px, calc(100vh - 130px));
+      background: #fff;
+      border-radius: var(--card-radius);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, .35);
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 999;
+      direction: rtl;
+      border: 1px solid rgba(60, 180, 74, .25);
+    }
+
+    .ai-chat-panel.open {
+      display: flex;
+      animation: aiPanelIn .2s ease both;
+    }
+
+    @keyframes aiPanelIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .ai-chat-header {
+      background: linear-gradient(135deg, var(--dys-navy), #1a1a4a);
+      color: #fff;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .ai-chat-header button {
+      background: none;
+      border: none;
+      color: #fff;
+      opacity: .8;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 2px 6px;
+    }
+
+    .ai-chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      font-size: 13px;
+      background: #f6f9f6;
+      min-height: 120px;
+    }
+
+    .ai-msg {
+      max-width: 85%;
+      padding: 9px 12px;
+      border-radius: 14px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+
+    .ai-msg.bot {
+      background: #fff;
+      border: 1px solid #e2e6e3;
+      color: #16321f;
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+    }
+
+    .ai-msg.user {
+      background: var(--dys-green);
+      color: #fff;
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+
+    .ai-msg.typing {
+      color: #6d8177;
+      font-style: italic;
+    }
+
+    .ai-chat-quick {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 10px 14px 0;
+      background: #f6f9f6;
+    }
+
+    .ai-chat-quick button {
+      background: #fff;
+      border: 1px solid rgba(60, 180, 74, .35);
+      color: #16321f;
+      font-size: 11.5px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-family: 'Cairo', sans-serif;
+    }
+
+    .ai-chat-input-row {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #f6f9f6;
+      border-top: 1px solid #e2e6e3;
+    }
+
+    .ai-chat-input-row input {
+      flex: 1;
+      border: 1px solid #d5ddd6;
+      border-radius: 999px;
+      padding: 9px 14px;
+      font-size: 13px;
+      font-family: 'Cairo', sans-serif;
+      min-width: 0;
+    }
+
+    .ai-chat-input-row button {
+      background: var(--dys-green);
+      color: #fff;
+      border: none;
+      border-radius: 999px;
+      padding: 0 16px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: 'Cairo', sans-serif;
+    }
+
+    .ai-chat-input-row button:disabled {
+      opacity: .6;
+      cursor: default;
+    }
+
+    @media (max-width: 400px) {
+      .ai-chat-bubble {
+        bottom: 14px;
+        left: 14px;
+        width: 52px;
+        height: 52px;
+        font-size: 22px;
+      }
+
+      .ai-chat-panel {
+        bottom: 78px;
+        left: 12px;
+      }
+    }
   </style>
 </head>
+
 
 <body dir="rtl">
 
   <canvas id="confettiCanvas"></canvas>
+
+  <!-- AI chat assistant — helps registrants with questions about THIS form
+       only (deadline, required fields, contact channels). Never sees any
+       registrant's actual submitted data — see buildFormAiPrompt_ in Code.gs. -->
+  <button type="button" class="ai-chat-bubble" id="aiChatBubble" aria-label="مساعد التسجيل">💬</button>
+  <div class="ai-chat-panel" id="aiChatPanel">
+    <div class="ai-chat-header">
+      <span>🤖 مساعد التسجيل</span>
+      <button type="button" id="aiChatClose" aria-label="قفل">✕</button>
+    </div>
+    <div class="ai-chat-messages" id="aiChatMessages"></div>
+    <div class="ai-chat-quick" id="aiChatQuick"></div>
+    <div class="ai-chat-input-row">
+      <input type="text" id="aiChatInput" placeholder="اسأل عن التسجيل...">
+      <button type="button" id="aiChatSend">إرسال</button>
+    </div>
+  </div>
 
   <div class="wrap">
     <div class="topbar">
@@ -2960,12 +3171,99 @@
       });
     }
 
+    // ==================== AI chat assistant (registrant-facing) ====================
+    const AI_QUICK_QUESTIONS_FORM = [
+      "التسجيل بيقفل امتى؟",
+      "لازم أملى كل الحقول؟",
+      "فيه جروب واتساب بعد التسجيل؟",
+      "إزاي أتأكد إن تسجيلي نجح؟",
+    ];
+    let aiChatHistoryForm = [];
+    let aiChatOpenedForm = false;
+
+    function aiAppendMessageForm_(role, text, isTyping) {
+      const box = document.getElementById("aiChatMessages");
+      const div = document.createElement("div");
+      div.className = "ai-msg " + role + (isTyping ? " typing" : "");
+      div.textContent = text;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+      return div;
+    }
+
+    function aiRenderQuickQuestionsForm_() {
+      const box = document.getElementById("aiChatQuick");
+      box.innerHTML = "";
+      AI_QUICK_QUESTIONS_FORM.forEach(q => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = q;
+        btn.addEventListener("click", () => aiSendMessageForm_(q));
+        box.appendChild(btn);
+      });
+    }
+
+    function aiSendMessageForm_(text) {
+      text = (text || document.getElementById("aiChatInput").value).trim();
+      if (!text) return;
+      document.getElementById("aiChatInput").value = "";
+      aiAppendMessageForm_("user", text);
+      const sendBtn = document.getElementById("aiChatSend");
+      sendBtn.disabled = true;
+      const typingEl = aiAppendMessageForm_("bot", "بيكتب...", true);
+
+      fetch(SCRIPT_URL, {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "chatAI", context: "form", formId: DYS_FORM_ID, message: text, history: aiChatHistoryForm }),
+      })
+        .then(r => r.json())
+        .then(res => {
+          typingEl.remove();
+          if (res.status === "success") {
+            aiAppendMessageForm_("bot", res.reply);
+            aiChatHistoryForm.push({ role: "user", text });
+            aiChatHistoryForm.push({ role: "bot", text: res.reply });
+          } else {
+            aiAppendMessageForm_("bot", res.message || "حصل خطأ، جرب تاني.");
+          }
+        })
+        .catch(() => {
+          typingEl.remove();
+          aiAppendMessageForm_("bot", "تعذر الاتصال — جرب تاني.");
+        })
+        .finally(() => { sendBtn.disabled = false; });
+    }
+
+    function initAiChatForm_() {
+      const bubble = document.getElementById("aiChatBubble");
+      bubble.classList.add("visible");
+      bubble.addEventListener("click", () => {
+        const panel = document.getElementById("aiChatPanel");
+        panel.classList.toggle("open");
+        if (panel.classList.contains("open") && !aiChatOpenedForm) {
+          aiChatOpenedForm = true;
+          aiRenderQuickQuestionsForm_();
+          aiAppendMessageForm_("bot", "أهلًا! أنا مساعد التسجيل 👋 اسألني عن أي حاجة تخص استمارة التسجيل دي.");
+        }
+      });
+      document.getElementById("aiChatClose").addEventListener("click", () => {
+        document.getElementById("aiChatPanel").classList.remove("open");
+      });
+      document.getElementById("aiChatSend").addEventListener("click", () => aiSendMessageForm_());
+      document.getElementById("aiChatInput").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") aiSendMessageForm_();
+      });
+    }
+
     // ==================== Init ====================
     applyLang(currentLang);
     loadDraftIfAny();
     computeProgress();
     showStep(currentStep);
     loadRegistrationConfig();
+    initAiChatForm_();
     // Note: flushing any offline-queued submission from a previous session is
     // handled by the "load" event listener registered above, so it only runs once.
   </script>
