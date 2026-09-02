@@ -822,6 +822,14 @@
       border-radius: 16px;
       padding: 20px;
       box-shadow: 0 8px 24px rgba(0, 0, 0, .15);
+      /* .settings-card is a grid item inside .settings-grid; grid items
+         default to min-width: auto, which refuses to shrink below the
+         card's intrinsic content width (long select options, buttons,
+         etc). On narrow phones that pushed the card wider than the
+         viewport, and since the page has overflow-x: hidden, the
+         overflowing part (left side, in this RTL layout) became
+         permanently unreachable — invisible with no way to scroll to it. */
+      min-width: 0;
     }
 
     .settings-card h3 {
@@ -923,6 +931,7 @@
 
     .cycle-row select {
       flex: 1;
+      min-width: 0;
       padding: 9px 10px;
       border-radius: 10px;
       border: 1.5px solid #e2e6e3;
