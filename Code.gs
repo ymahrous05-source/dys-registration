@@ -604,11 +604,17 @@ function callGemini_(systemPrompt, userMessage, history) {
     const contents = (history || []).map(h => ({ role: h.role === "user" ? "user" : "model", parts: [{ text: h.text }] }));
     contents.push({ role: "user", parts: [{ text: userMessage }] });
     const res = UrlFetchApp.fetch(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=" + GEMINI_API_KEY,
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
       {
         method: "post",
         contentType: "application/json",
         muteHttpExceptions: true,
+        // The newer "Auth key" format (AQ....) that AI Studio now issues by
+        // default gets rejected with 401 ACCESS_TOKEN_TYPE_UNSUPPORTED when
+        // sent as a ?key= query param — it needs to go in this header
+        // instead. This also still works fine with an old-style AIzaSy...
+        // key, so nothing breaks either way.
+        headers: { "x-goog-api-key": GEMINI_API_KEY },
         payload: JSON.stringify({
           systemInstruction: { parts: [{ text: systemPrompt }] },
           contents,
@@ -640,12 +646,23 @@ function callGrok_(systemPrompt, userMessage, history) {
     const messages = [{ role: "system", content: systemPrompt }];
     (history || []).forEach(h => messages.push({ role: h.role === "user" ? "user" : "assistant", content: h.text }));
     messages.push({ role: "user", content: userMessage });
-    const res = UrlFetchApp.fetch("https://api.x.ai/v1/chat/completions", {
+
+    // GROK_API_KEY might be a real xAI key ("xai-...") or a Groq key
+    // ("gsk_...") — those are two different companies with two different
+    // endpoints/models. Auto-detect from the key's prefix so either one
+    // just works, instead of silently failing when they don't match.
+    const isGroq = GROK_API_KEY.indexOf("gsk_") === 0;
+    const endpoint = isGroq ? "https://api.groq.com/openai/v1/chat/completions" : "https://api.x.ai/v1/chat/completions";
+       // llama-3.3-70b-versatile was decommissioned by Groq on 16 Aug 2026 —
+    // this is Groq's own recommended replacement.
+    const model = isGroq ? "openai/gpt-oss-120b" : "grok-beta";
+
+    const res = UrlFetchApp.fetch(endpoint, {
       method: "post",
       contentType: "application/json",
       muteHttpExceptions: true,
       headers: { Authorization: "Bearer " + GROK_API_KEY },
-      payload: JSON.stringify({ model: "grok-beta", messages, temperature: 0.4, max_tokens: 400 }),
+      payload: JSON.stringify({ model, messages, temperature: 0.4, max_tokens: 400 }),
     });
     if (res.getResponseCode() !== 200) return null;
     const data = JSON.parse(res.getContentText());
@@ -790,10 +807,14 @@ function handleChatAI_(payload) {
     systemPrompt = buildFormAiPrompt_(cfg);
   }
 
-  const history = Array.isArray(payload.history) ? payload.history.slice(-8) : [];
-  let reply = callGemini_(systemPrompt, message, history);
-  let provider = "gemini";
-  if (!reply) { reply = callGrok_(systemPrompt, message, history); provider = "grok"; }
+    const history = Array.isArray(payload.history) ? payload.history.slice(-8) : [];
+  // Groq tried FIRST — Gemini is currently blocked by a known Google-side
+  // bug affecting "AQ." auth keys (401 ACCESS_TOKEN_TYPE_UNSUPPORTED on
+  // generateContent, widely reported, no fix yet as of Sept 2026). Swap
+  // this back to Gemini-first once Google resolves it.
+  let reply = callGrok_(systemPrompt, message, history);
+  let provider = "grok";
+  if (!reply) { reply = callGemini_(systemPrompt, message, history); provider = "gemini"; }
   if (!reply) {
     return jsonOutput_({ status: "error", message: "المساعد مش متاح دلوقتي — جرب تاني كمان شوية، أو استخدم الأسئلة الجاهزة." });
   }
@@ -3127,11 +3148,12 @@ function checkAiQuotaNow() {
 
 function testGeminiNow() {
   const res = UrlFetchApp.fetch(
-       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=" + GEMINI_API_KEY,
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
     {
       method: "post",
       contentType: "application/json",
       muteHttpExceptions: true,
+      headers: { "x-goog-api-key": GEMINI_API_KEY },
       payload: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: "قول أهلاً" }] }],
       }),
@@ -3139,4 +3161,32 @@ function testGeminiNow() {
   );
   Logger.log("Status: " + res.getResponseCode());
   Logger.log("Body: " + res.getContentText());
+}
+
+
+
+function testGroqNow() {
+  const res = UrlFetchApp.fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "post",
+    contentType: "application/json",
+    muteHttpExceptions: true,
+    headers: { Authorization: "Bearer " + GROK_API_KEY },
+    payload: JSON.stringify({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: "قول أهلاً" }],
+      temperature: 0.4,
+      max_tokens: 100,
+    }),
+  });
+  Logger.log("Status: " + res.getResponseCode());
+  Logger.log("Body: " + res.getContentText());
+}
+
+function testChatNow() {
+  const reply = callGrok_(
+    "انت مساعد بسيط، رد بجملة واحدة بس.",
+    "قول أهلاً",
+    []
+  );
+  Logger.log("Grok reply: " + reply);
 }
