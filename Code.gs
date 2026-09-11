@@ -40,7 +40,7 @@
 // deployments ▸ Edit (✏️) ▸ New version ▸ Deploy (see BACKEND_SETUP_STEPS.md
 // step 7). This single check rules out the #1 cause of "I edited the code
 // but nothing changed."
-const CODE_VERSION = "2026-08-25-checkin-scanner";
+const CODE_VERSION = "2026-09-10-full-feature-port-from-osh";
 
 // ---------------------------------------------------------------------------
 // Google Sign-In (optional — the old shared password keeps working forever
@@ -50,7 +50,7 @@ const CODE_VERSION = "2026-08-25-checkin-scanner";
 // Services ▸ Credentials — see BACKEND_SETUP_STEPS.md). Leave the
 // placeholder as-is and the "تسجيل دخول بجوجل" button just won't work yet —
 // everything else (password login) is unaffected.
-const GOOGLE_CLIENT_ID = "839154817826-d9dhm6t1osl2oem173t84diprmfcbrvg.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = "839154817826-d9dhm6t1osl2oem173t84diprmfcbrvg.apps.googleusercontent.com"; // TODO: paste your own OAuth Client ID here (Google Cloud Console) if you want "Sign in with Google" — see comment above. Password login works fine without it.
 
 // How long a Google-signed-in session stays valid before that person has to
 // sign in again (they'll just see the "Sign in with Google" button reappear
@@ -75,7 +75,7 @@ const SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 //
 // Leave FROM_EMAIL as "" to skip all this and just send from the script
 // owner's own address, exactly like before this feature existed.
-const FROM_EMAIL = "dyssanad@gmail.com";
+const FROM_EMAIL = "dyssanad@gmail.com"; // TODO: set a verified "send mail as" address for سند شباب الدلتا, or leave "" to send from the script owner's own Google account
 const FROM_NAME = "سند شباب الدلتا";
 
 // Central email sender — every outgoing email in this file goes through
@@ -115,6 +115,28 @@ const PERMISSION_KEYS = ["manageSettings", "manageFields", "manageCertificates",
 
 const SHEET_NAME = "Registrations"; // <-- change to match your actual tab name (used as the default/first cycle's sheet)
 
+// The Sheet this backend reads/writes. SpreadsheetApp.getActiveSpreadsheet()
+// only works when a script is BOUND to a Sheet and running from inside its
+// UI — it returns null for a deployed Web App (which is how this backend
+// actually runs), causing "Cannot read properties of null" errors. Using
+// openById() with an explicit ID works from any context, bound or not.
+// Get this ID from your Sheet's URL: .../spreadsheets/d/THIS_PART/edit
+// The Sheet this backend reads/writes.
+//
+// ⚠️ IMPORTANT — this is deliberately left as getActiveSpreadsheet() (your
+// original setup), NOT hardcoded to a specific Sheet ID. openById() with an
+// explicit ID is more robust for a deployed Web App (getActiveSpreadsheet()
+// can return null in that context — see BACKEND_SETUP_STEPS.md's notes on
+// this), but it must point at YOUR real Sheet — copying OSH's ID here by
+// mistake would silently write سند شباب الدلتا's registrations into a
+// completely different organization's spreadsheet. If registrations aren't
+// saving correctly with the current getActiveSpreadsheet() setup, get YOUR
+// OWN Sheet's ID from its URL (.../spreadsheets/d/THIS_PART/edit) and ask to
+// switch this to openById() with that exact ID.
+function getSpreadsheet_() {
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
+
 // Column order written to the sheet. Keep this order in sync with HEADERS —
 // index i of HEADERS must correspond to index i of the row array built in
 // buildRow_(). The dashboard finds columns by header NAME (not position), so
@@ -142,7 +164,7 @@ const FIELD_SECTIONS = {
   personal: "بيانات شخصية إضافية",
   education: "بيانات تعليمية ووظيفية إضافية",
   contact: "بيانات تواصل إضافية",
-  entity: "بيانات داخل الكيان إضافية",
+  entity: "بيانات إضافية",
   other: "حقول تانية",
   custom: "حقول مخصصة",
 };
@@ -151,7 +173,7 @@ const EXTRA_FIELDS = {
   address:        { section: "personal", label: "العنوان بالتفصيل", type: "text", defaultRequired: false },
   birthDate:      { section: "personal", label: "تاريخ الميلاد", type: "date", defaultRequired: false },
   maritalStatus:  { section: "personal", label: "الحالة الاجتماعية", type: "select", options: ["أعزب", "متزوج", "مطلق", "أرمل"], defaultRequired: false },
-  governorate:    { section: "personal", label: "المحافظة", type: "text", defaultRequired: false },
+  governorate:    { section: "personal", label: "المحافظة", type: "select", options: ["القاهرة", "الجيزة", "القليوبية", "الإسكندرية", "البحيرة", "مطروح", "كفر الشيخ", "الدقهلية", "دمياط", "الشرقية", "الغربية", "المنوفية", "بورسعيد", "الإسماعيلية", "السويس", "شمال سيناء", "جنوب سيناء", "بني سويف", "الفيوم", "المنيا", "أسيوط", "سوهاج", "قنا", "الأقصر", "أسوان", "البحر الأحمر", "الوادي الجديد"], defaultRequired: false },
   academicYear:   { section: "education", label: "الفرقة الدراسية", type: "text", defaultRequired: false },
   gradeLevel:     { section: "education", label: "التقدير الدراسي", type: "text", defaultRequired: false },
   facebook:       { section: "contact", label: "رابط الفيسبوك", type: "text", defaultRequired: false },
@@ -198,7 +220,7 @@ const HEADERS = [
   "Role in Entity",   // ← this is the "committee" field from the form
   "Has Job",
   "Current Job",
-].concat(EXTRA_HEADERS).concat([CUSTOM_FIELDS_HEADER]).concat(["Photo URL", "Video URL", "Checked In At"]);
+].concat(EXTRA_HEADERS).concat([CUSTOM_FIELDS_HEADER]).concat(["Photo URL", "Video URL", "Checked In At", "Receipt URL", "Payment Status", "Group Offer"]);
 
 const MIN_FILL_MS = 2500; // mirrors the frontend's own MIN_FILL_MS anti-bot check
 const MEMBERSHIP_PREFIX = "DYS";
@@ -208,10 +230,17 @@ const MEMBERSHIP_PREFIX = "DYS";
 // settings card. Each of these can be shown/hidden on the form, and marked
 // required or optional, WITHOUT touching any code or the sheet's columns
 // (the column stays in HEADERS either way — it's just left blank when a
-// field is disabled or skipped). "Name" and "National ID" are intentionally
-// NOT in this list: the whole duplicate-check + membership system depends
-// on them, so they always stay shown and required.
+// field is disabled or skipped). "Name" is intentionally NOT in this list —
+// every downstream row/email/dashboard view assumes a registrant has a name,
+// so it always stays shown and required. National ID USED to be hardcoded
+// the same way, but it's now toggleable like everything else here — when
+// it's off/optional and a registrant has no ID, duplicate-detection
+// (isDuplicateNid_/findExistingMembershipNo_) and the admin "resend
+// email"/"send certificate" single-member lookups (handleSendCertificate_/
+// handleResendConfirmationEmail_) all specifically guard against ever
+// matching one blank ID to another — see the comments at each of those.
 const TOGGLEABLE_FIELDS = {
+  nationalId: { section: "personal", label: "الرقم القومي", defaultRequired: true },
   age:       { section: "personal", label: "العمر", defaultRequired: true },
   gender:    { section: "personal", label: "النوع", defaultRequired: true },
   phone:     { section: "contact", label: "رقم الهاتف", defaultRequired: true },
@@ -239,12 +268,19 @@ const PHOTO_FIELD = { section: "personal", label: "صورة شخصية", type: "
 // BACKEND_SETUP_STEPS.md's "Cloudinary" section for the one-time setup.
 const VIDEO_FIELD = { section: "personal", label: "فيديو (اختياري)", type: "video", defaultRequired: false };
 
-// Every built-in field (original 9 + the newer 17 + the photo field) — this
-// is what the dashboard's "🧩 حقول الاستمارة" card and
-// getFieldConfig_/handleSaveFieldConfig_ iterate over. The original 9 keep
+// Same idea as PHOTO_FIELD (upload handled server-side through Apps
+// Script/Drive, not Cloudinary — a receipt screenshot is small, no need for
+// the video field's separate direct-to-Cloudinary path). Off by default
+// (defaultRequired: false, same as photo) since not every form collects
+// payment — an admin turns it on from "🧩 حقول الاستمارة" for events that do.
+const RECEIPT_FIELD = { section: "entity", label: "صورة إيصال الدفع", type: "receipt", defaultRequired: false };
+
+// Every built-in field (original 10 + the newer 17 + the photo/video/receipt
+// fields) — this is what the dashboard's "🧩 حقول الاستمارة" card and
+// getFieldConfig_/handleSaveFieldConfig_ iterate over. The original 10 keep
 // their bespoke hand-written validation in validatePayload_ (unchanged);
 // EXTRA_FIELDS are validated generically.
-const ALL_BUILTIN_FIELDS = Object.assign({}, TOGGLEABLE_FIELDS, EXTRA_FIELDS, { photo: PHOTO_FIELD, video: VIDEO_FIELD });
+const ALL_BUILTIN_FIELDS = Object.assign({}, TOGGLEABLE_FIELDS, EXTRA_FIELDS, { photo: PHOTO_FIELD, video: VIDEO_FIELD, receiptPhoto: RECEIPT_FIELD });
 
 
 // ---------------------------------------------------------------------------
@@ -262,6 +298,7 @@ function doGet(e) {
     if (action === "listCycles") return handleListCycles_(e);
     if (action === "diagnostics") return handleDiagnostics_(e);
     if (action === "verifyMember") return handleVerifyMember_(e); // event check-in scanner — read-only lookup
+    if (action === "checkMyStatus") return handleCheckMyStatus_(e); // public status page — read-only, requires membership no + email/phone together
     if (action === "listForms") return handleListForms_(e);
     if (action === "approveAccess") return handleReviewAccess_(e, true);
     if (action === "rejectAccess") return handleReviewAccess_(e, false);
@@ -310,6 +347,10 @@ function doPost(e) {
       "saveConfig", "uploadLogo", "removeLogo",
       "uploadCertTemplate", "removeCertTemplate",
       "sendCertificate", "sendCertificatesBulk", "sendTestCertificate",
+      "resendConfirmationEmail",
+      "confirmPayment",
+      "confirmGroupPayment",
+      "sendPaymentReminders",
       "saveFieldConfig",
       "listAdminAccounts", "addAdminAccount", "removeAdminAccount", "reviewAccess", "updateAccountPermissions",
       "exportExcel", "getActivityLog",
@@ -419,6 +460,10 @@ function getFieldConfig_(formId) {
       // ever dragged anything), so ordering degrades gracefully to "however
       // they were defined" rather than a random/undefined order.
       order: typeof s.order === "number" ? s.order : index,
+      // Renamed label, if the admin ever typed one in — "" means "no
+      // override, use the built-in default" (see buildFieldLabelOverrides_
+      // and buildFieldDefsForClient_, which are what actually apply this).
+      label: typeof s.label === "string" ? s.label : "",
     };
   });
   return result;
@@ -439,9 +484,17 @@ function handleSaveFieldConfig_(payload) {
       enabled: f.enabled !== false,   // default true unless explicitly turned off
       required: f.required === true,  // default false unless explicitly turned on
       order: typeof f.order === "number" ? f.order : index,
+      label: String(f.label || "").trim(),
     };
   });
   PropertiesService.getScriptProperties().setProperty(propKey_("FIELD_CONFIG", formId), JSON.stringify(sanitized));
+
+  // "name" isn't part of ALL_BUILTIN_FIELDS at all (it's never toggleable —
+  // see the note on TOGGLEABLE_FIELDS above) so its renamed label, if any,
+  // is kept as its own tiny setting instead of living in FIELD_CONFIG.
+  if (typeof payload.nameLabel !== "undefined") {
+    PropertiesService.getScriptProperties().setProperty(propKey_("NAME_LABEL", formId), String(payload.nameLabel || "").trim());
+  }
 
   let customFields = getCustomFields_(formId);
   if (Array.isArray(payload.customFields)) {
@@ -452,7 +505,66 @@ function handleSaveFieldConfig_(payload) {
     customFields.forEach((cf, i) => { cf.order = i; });
     saveCustomFields_(customFields, formId);
   }
-  return jsonOutput_({ status: "success", fieldConfig: sanitized, customFields });
+
+  // Section headings ("بيانات إضافية", "حقول مخصصة", etc.) — optional
+  // per-form overrides of the FIELD_SECTIONS defaults. Only the keys the
+  // admin actually typed something into get saved; leaving one blank just
+  // falls back to its default text (see getSectionLabels_ below).
+  const fieldSections = getSectionLabelOverrides_(formId);
+  if (payload.sectionLabels && typeof payload.sectionLabels === "object") {
+    Object.keys(FIELD_SECTIONS).forEach(key => {
+      const v = String(payload.sectionLabels[key] || "").trim();
+      if (v) fieldSections[key] = v; else delete fieldSections[key];
+    });
+    PropertiesService.getScriptProperties().setProperty(propKey_("SECTION_LABELS", formId), JSON.stringify(fieldSections));
+  }
+
+  let groupTiers = getGroupTiers_(formId);
+  if (Array.isArray(payload.groupTiers)) {
+    groupTiers = payload.groupTiers.map(sanitizeGroupTier_).filter(Boolean);
+    saveGroupTiers_(groupTiers, formId);
+  }
+
+  return jsonOutput_({ status: "success", fieldConfig: sanitized, customFields, groupTiers });
+}
+
+// Per-form overrides of the FIELD_SECTIONS default headings (personal,
+// education, contact, entity, other, custom) — lets an admin rename e.g.
+// "حقول مخصصة" to whatever they actually call it, from the "🧩 حقول
+// الاستمارة" card, same as any other setting. Falls back to the built-in
+// default for any key never overridden.
+function getSectionLabelOverrides_(formId) {
+  const raw = PropertiesService.getScriptProperties().getProperty(propKey_("SECTION_LABELS", formId));
+  if (!raw) return {};
+  try {
+    const obj = JSON.parse(raw);
+    return (obj && typeof obj === "object") ? obj : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function getSectionLabels_(formId) {
+  return Object.assign({}, FIELD_SECTIONS, getSectionLabelOverrides_(formId));
+}
+
+// Free-form overrides for ANY text key in the form's i18n dictionary
+// (dys_form.html's I18N.ar) — error/validation messages, button labels,
+// anything not already covered by its own dedicated setting (formTitle,
+// trustNote, formSubtitle, fieldLabels...). Stored as a flat {key: text}
+// object; a key not present here just uses the form's built-in default. No
+// validation of WHICH keys are real — an unrecognized key is simply never
+// looked up by anything and has no effect, so a typo here can't break
+// anything, just silently do nothing.
+function getI18nOverrides_(formId) {
+  const raw = PropertiesService.getScriptProperties().getProperty(propKey_("I18N_OVERRIDES", formId));
+  if (!raw) return {};
+  try {
+    const obj = JSON.parse(raw);
+    return (obj && typeof obj === "object" && !Array.isArray(obj)) ? obj : {};
+  } catch (e) {
+    return {};
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -465,7 +577,88 @@ function handleSaveFieldConfig_(payload) {
 // ---------------------------------------------------------------------------
 
 function getCustomFields_(formId) {
+  let arr = [];
   const raw = PropertiesService.getScriptProperties().getProperty(propKey_("CUSTOM_FIELDS", formId));
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) arr = parsed;
+    } catch (e) { arr = []; }
+  }
+
+  // One-time seed — adds the "متطوع بالفعل / عضو جديد" question
+  // automatically the first time this runs after being deployed, so it
+  // shows up on the form without anyone having to add it by hand from
+  // "🧩 حقول الاستمارة". Guarded by its own marker property so it only ever
+  // runs ONCE per form: after that it's saved for real, exactly like any
+  // custom field the admin adds themselves — freely editable, reorderable,
+  // or deletable from the dashboard, and it will NOT come back once removed.
+  const props = PropertiesService.getScriptProperties();
+  const seedKey = propKey_("SEEDED_VOLUNTEER_FIELD_V1", formId);
+  if (!props.getProperty(seedKey)) {
+    arr = arr.concat([{
+      key: "c_isvolunteer",
+      label: "هل انت متطوع معانا بالفعل؟",
+      type: "select",
+      options: ["متطوع بالفعل", "عضو جديد"],
+      required: true,
+      enabled: true,
+      order: arr.length,
+    }]);
+    saveCustomFields_(arr, formId);
+    props.setProperty(seedKey, "1");
+  }
+
+  // Second, independent one-time seed — a "group code" field for
+  // group/bundle offers ("عرض الصحاب", "الستة مع بعض", ...). Everyone
+  // registering together agrees on and types the SAME code (their own
+  // choice — a name, a number, anything); handleConfirmGroupPayment_ below
+  // then confirms payment for every registrant sharing that exact code in
+  // one click, instead of the admin hunting down each group member
+  // one-by-one from a free-text "names of your friends" field. Optional
+  // (not required — most registrants aren't part of a group offer), and
+  // guarded by its own separate marker so it seeds independently of the
+  // volunteer question above.
+  const groupCodeSeedKey = propKey_("SEEDED_GROUP_CODE_FIELD_V1", formId);
+  if (!props.getProperty(groupCodeSeedKey)) {
+    arr = arr.concat([{
+      key: "c_groupcode",
+      label: "كود المجموعة (لو مسجل ضمن عرض جماعة — اتفقوا كلكم على نفس الكود)",
+      type: "text",
+      required: false,
+      enabled: true,
+      order: arr.length,
+    }]);
+    saveCustomFields_(arr, formId);
+    props.setProperty(groupCodeSeedKey, "1");
+  }
+
+  return arr;
+}
+
+function saveCustomFields_(fields, formId) {
+  PropertiesService.getScriptProperties().setProperty(propKey_("CUSTOM_FIELDS", formId), JSON.stringify(fields));
+}
+
+const CUSTOM_FIELD_TYPES = ["text", "textarea", "number", "date", "select", "checkbox"];
+
+// ---------------------------------------------------------------------------
+// Group/bundle offer tiers ("عرض الصحاب", "عرض الستة", ...) — optional,
+// admin-defined from the dashboard. When a form has at least one tier
+// configured, the public form shows a "سجّلت إزاي؟" choice; picking a tier
+// with size > 1 dynamically asks for (size - 1) more people's name + email
+// right there in the SAME submission — see collectGroupMembers_ in
+// dys_form.html. handleSubmit_ then creates one extra row per named friend
+// automatically, gives each their own membership number + confirmation
+// email + QR, and stamps everyone (the submitter included) with the SAME
+// auto-generated "c_groupcode" custom-field value, so
+// handleConfirmGroupPayment_ above can confirm the whole group's payment in
+// one click once it's actually paid. This is the "everyone in one go"
+// path — the manual "c_groupcode" text field (seeded separately in
+// getCustomFields_) still exists for the OTHER case: a group whose members
+// each fill out the form separately but agree on a shared code themselves.
+function getGroupTiers_(formId) {
+  const raw = PropertiesService.getScriptProperties().getProperty(propKey_("GROUP_TIERS", formId));
   if (!raw) return [];
   try {
     const arr = JSON.parse(raw);
@@ -475,11 +668,19 @@ function getCustomFields_(formId) {
   }
 }
 
-function saveCustomFields_(fields, formId) {
-  PropertiesService.getScriptProperties().setProperty(propKey_("CUSTOM_FIELDS", formId), JSON.stringify(fields));
+function saveGroupTiers_(tiers, formId) {
+  PropertiesService.getScriptProperties().setProperty(propKey_("GROUP_TIERS", formId), JSON.stringify(tiers));
 }
 
-const CUSTOM_FIELD_TYPES = ["text", "textarea", "number", "date", "select", "checkbox"];
+// size is capped at 20 — a sane ceiling against a typo like "200" silently
+// asking every registrant to fill in 199 friends' details.
+function sanitizeGroupTier_(t) {
+  const label = String((t && t.label) || "").trim();
+  if (!label) return null;
+  const size = Math.max(1, Math.min(20, parseInt(t && t.size, 10) || 1));
+  const id = (t && t.id && /^gt_[a-z0-9]+$/.test(t.id)) ? t.id : "gt_" + Utilities.getUuid().replace(/-/g, "").slice(0, 8);
+  return { id, label, size };
+}
 
 // ---------------------------------------------------------------------------
 // "Success screen" actions — the buttons shown to a registrant right after
@@ -497,19 +698,54 @@ const CUSTOM_FIELD_TYPES = ["text", "textarea", "number", "date", "select", "che
 //   telegram       — Telegram group/channel link (t.me/...).
 //   facebook       — Facebook page/group link.
 //   instagram      — Instagram profile link.
+//   email          — mailto: link (frontend prefixes "mailto:" automatically
+//                     — store just the bare address here).
+//   wallet_copy    — a button showing a wallet/payment app name (e.g.
+//                     "فودافون كاش") that copies its phone number to the
+//                     clipboard on tap — NOT a link/deep-link, since none of
+//                     Egypt's payment apps publish an official "open to a
+//                     pre-filled transfer" URL scheme the way WhatsApp does.
+//                     Copy-then-paste-in-their-own-app is the reliable
+//                     alternative. `value` is the bare phone/wallet number.
+//   text           — a plain sentence, no link/button at all (value is
+//                     empty/unused; only `label` is shown, as static text).
 //   link           — any other custom link/button (Drive folder, survey,
 //                     another website, ...).
-const SUCCESS_ACTION_TYPES = ["whatsapp_chat", "whatsapp_group", "telegram", "facebook", "instagram", "link"];
+const SUCCESS_ACTION_TYPES = ["whatsapp_chat", "whatsapp_group", "telegram", "facebook", "instagram", "email", "wallet_copy", "text", "link"];
 
 function getSuccessActions_(formId) {
   const raw = PropertiesService.getScriptProperties().getProperty(propKey_("SUCCESS_ACTIONS", formId));
-  if (!raw) return [];
-  try {
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr : [];
-  } catch (e) {
-    return [];
+  let arr = [];
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) arr = parsed;
+    } catch (e) { arr = []; }
   }
+
+  // One-time seed — adds a "اتأكد إن دفعك تمام" link to the public status
+  // page (dys_status.html / handleCheckMyStatus_) the first time this runs
+  // after being deployed, so registrants actually discover that page exists
+  // instead of it sitting there unlinked from anywhere. Guarded by its own
+  // marker so it only ever runs ONCE per form — after that it's a
+  // completely normal success action, freely editable/removable from "🎉
+  // خيارات بعد التسجيل" like any other, and won't come back once removed.
+  const props = PropertiesService.getScriptProperties();
+  const seedKey = propKey_("SEEDED_STATUS_LINK_V1", formId);
+  if (!props.getProperty(seedKey)) {
+    const statusUrl = "https://ymahrous05-source.github.io/dys-registration/dys_status.html" + (formId ? ("?form=" + encodeURIComponent(formId)) : "");
+    arr = arr.concat([{
+      id: "sa_" + Utilities.getUuid().replace(/-/g, "").slice(0, 8),
+      type: "link",
+      label: "اتأكد إن دفعك تمام ✓",
+      value: statusUrl,
+      enabled: true,
+    }]);
+    saveSuccessActions_(arr, formId);
+    props.setProperty(seedKey, "1");
+  }
+
+  return arr;
 }
 
 function saveSuccessActions_(actions, formId) {
@@ -522,9 +758,12 @@ function saveSuccessActions_(actions, formId) {
 // after a small edit doesn't reshuffle anything.
 function sanitizeSuccessAction_(a) {
   const label = String((a && a.label) || "").trim();
-  const value = String((a && a.value) || "").trim();
-  if (!label || !value) return null;
   const type = SUCCESS_ACTION_TYPES.indexOf(a && a.type) > -1 ? a.type : "link";
+  const value = String((a && a.value) || "").trim();
+  // "text" is a plain sentence with no link/button — value is optional.
+  // Every other type needs both a label and a value to be worth keeping.
+  if (!label) return null;
+  if (type !== "text" && !value) return null;
   const id = (a && a.id && /^sa_[a-z0-9]+$/.test(a.id)) ? a.id : "sa_" + Utilities.getUuid().replace(/-/g, "").slice(0, 8);
   return {
     id,
@@ -630,12 +869,16 @@ function callGemini_(systemPrompt, userMessage, history) {
         }),
       }
     );
-    if (res.getResponseCode() !== 200) return null;
+    if (res.getResponseCode() !== 200) {
+      console.error("Gemini call failed:", res.getResponseCode(), res.getContentText().slice(0, 500));
+      return null;
+    }
     const data = JSON.parse(res.getContentText());
     const parts = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
     const text = parts && parts[0] && parts[0].text;
     return text ? text.trim() : null;
   } catch (e) {
+    console.error("Gemini call threw:", e);
     return null;
   }
 }
@@ -653,22 +896,57 @@ function callGrok_(systemPrompt, userMessage, history) {
     // just works, instead of silently failing when they don't match.
     const isGroq = GROK_API_KEY.indexOf("gsk_") === 0;
     const endpoint = isGroq ? "https://api.groq.com/openai/v1/chat/completions" : "https://api.x.ai/v1/chat/completions";
-       // llama-3.3-70b-versatile was decommissioned by Groq on 16 Aug 2026 —
+    // llama-3.3-70b-versatile was decommissioned by Groq on 16 Aug 2026 —
     // this is Groq's own recommended replacement.
     const model = isGroq ? "openai/gpt-oss-120b" : "grok-beta";
+
+    // gpt-oss-120b is a REASONING model — it spends completion tokens on
+    // invisible chain-of-thought BEFORE writing the visible answer, and
+    // "max_tokens" is deprecated on Groq in favor of "max_completion_tokens"
+    // (the old name still works as an alias, but doesn't fix the real
+    // issue). A low budget like 400 routinely gets entirely eaten by
+    // reasoning for this model, leaving message.content = "" with
+    // finish_reason "length" — a normal HTTP 200, so it looks like nothing
+    // is wrong, but this function then (correctly) treats that empty string
+    // as "no answer" and returns null, which is exactly what made the
+    // assistant look totally dead even with a perfectly valid key.
+    // reasoning_effort: "low" keeps that invisible overhead small (this is
+    // a short FAQ-style assistant, not a task that benefits from deep
+    // reasoning), and the higher budget below leaves real headroom either
+    // way. xAI's grok-beta doesn't support either param, so both are Groq-only.
+    const payload = { model, messages, temperature: 0.4 };
+    if (isGroq) {
+      payload.max_completion_tokens = 800;
+      payload.reasoning_effort = "low";
+    } else {
+      payload.max_tokens = 400;
+    }
 
     const res = UrlFetchApp.fetch(endpoint, {
       method: "post",
       contentType: "application/json",
       muteHttpExceptions: true,
       headers: { Authorization: "Bearer " + GROK_API_KEY },
-      payload: JSON.stringify({ model, messages, temperature: 0.4, max_tokens: 400 }),
+      payload: JSON.stringify(payload),
     });
-    if (res.getResponseCode() !== 200) return null;
+    if (res.getResponseCode() !== 200) {
+      console.error("Groq/xAI call failed:", res.getResponseCode(), res.getContentText().slice(0, 500));
+      return null;
+    }
     const data = JSON.parse(res.getContentText());
     const text = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-    return text ? text.trim() : null;
+    if (!text) {
+      // HTTP 200 but empty content — almost always the reasoning-budget
+      // issue described above (finish_reason "length" with nothing left for
+      // the visible answer). Logged distinctly from a real HTTP failure so
+      // this is diagnosable at a glance instead of looking identical to a
+      // dead API key.
+      console.error("Groq/xAI returned empty content:", JSON.stringify(data).slice(0, 500));
+      return null;
+    }
+    return text.trim();
   } catch (e) {
+    console.error("Groq/xAI call threw:", e);
     return null;
   }
 }
@@ -696,7 +974,7 @@ function buildFormAiPrompt_(cfg) {
 
   return (
     `انت مساعد ودود بيرد على أسئلة الناس اللي بتحاول تسجل في استمارة "${cfg.formTitle || "التسجيل"}" ` +
-    `بتاعة سند شباب الدلتا (منظمة شبابية تطوعية).\n\n` +
+    `بتاعة سند شباب الدلتا (مبادرة طلابية تطوعية في الجامعات المصرية).\n\n` +
     `معلومات عن الاستمارة دي:\n` +
     `- حالة التسجيل: ${phaseText}\n` +
     `- الحقول المطلوبة/الموجودة في الاستمارة: ${fieldLabels.join("، ") || "الاسم والرقم القومي بس"}\n` +
@@ -829,6 +1107,10 @@ function handlePublicConfig_(e) {
   return jsonOutput_({
     status: "success",
     formTitle: cfg.formTitle,
+    trustNote: cfg.trustNote,
+    formSubtitle: cfg.formSubtitle,
+    fieldLabels: cfg.fieldLabels,
+    i18nOverrides: cfg.i18nOverrides,
     logoUrl: cfg.logoUrl,
     startAt: cfg.startAt,
     endAt: cfg.endAt,
@@ -837,6 +1119,7 @@ function handlePublicConfig_(e) {
     fieldDefs: cfg.fieldDefs,
     fieldSections: cfg.fieldSections,
     customFields: cfg.customFields,
+    groupTiers: cfg.groupTiers,
     // Public form only ever needs the ENABLED buttons — disabled ones stay
     // hidden from anyone inspecting the public endpoint, not just from the UI.
     successActions: (cfg.successActions || []).filter(a => a.enabled !== false),
@@ -894,7 +1177,7 @@ function handleListCycles_(e) {
   }
   const formId = String(e.parameter.form || "").trim();
   const cfg = getRegConfig_(formId);
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getSpreadsheet_();
 
   const claimedByOthers = new Set();
   listAllForms_(true).forEach(f => {
@@ -1018,7 +1301,70 @@ function handleDiagnostics_(e) {
     report.firestoreMirror = "بترمي خطأ: " + String(err);
   }
 
+  // 9) AI assistant (the "🤖 مساعد التسجيل" widget on the form) — a real
+  // one-token test call to each configured provider, so a failure here shows
+  // the ACTUAL reason (bad/expired key, rate limit, decommissioned model...)
+  // instead of just the generic "المساعد مش متاح دلوقتي" the widget itself
+  // shows to registrants. Unlike callGemini_/callGrok_ (which must stay
+  // silent — a chat widget failing shouldn't ever throw noisy errors at a
+  // registrant), this deliberately surfaces the raw HTTP status + response
+  // body for whichever provider(s) are configured.
+  report.aiProviders = {};
+  if (aiConfigured_(GEMINI_API_KEY)) {
+    report.aiProviders.gemini = testAiProviderRaw_("gemini");
+  } else {
+    report.aiProviders.gemini = "مش متعدّد (GEMINI_API_KEY لسه فاضي/PASTE_YOUR...)";
+  }
+  if (aiConfigured_(GROK_API_KEY)) {
+    report.aiProviders.groqOrXai = testAiProviderRaw_("groq");
+  } else {
+    report.aiProviders.groqOrXai = "مش متعدّد (GROK_API_KEY لسه فاضي/PASTE_YOUR...)";
+  }
+
   return jsonOutput_({ status: "success", report });
+}
+
+// Bare-bones live test call for handleDiagnostics_ above — deliberately
+// bypasses callGemini_/callGrok_'s error-swallowing so the real HTTP status
+// and response body come back as a readable string.
+function testAiProviderRaw_(which) {
+  try {
+    if (which === "gemini") {
+      const res = UrlFetchApp.fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent",
+        {
+          method: "post",
+          contentType: "application/json",
+          muteHttpExceptions: true,
+          headers: { "x-goog-api-key": GEMINI_API_KEY },
+          payload: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "ping" }] }], generationConfig: { maxOutputTokens: 5 } }),
+        }
+      );
+      const code = res.getResponseCode();
+      return code === 200 ? "شغالة ✓" : `فشلت (HTTP ${code}): ${res.getContentText().slice(0, 300)}`;
+    }
+    const isGroq = GROK_API_KEY.indexOf("gsk_") === 0;
+    const endpoint = isGroq ? "https://api.groq.com/openai/v1/chat/completions" : "https://api.x.ai/v1/chat/completions";
+    const model = isGroq ? "openai/gpt-oss-120b" : "grok-beta";
+    const payload = { model, messages: [{ role: "user", content: "ping" }] };
+    if (isGroq) { payload.max_completion_tokens = 800; payload.reasoning_effort = "low"; }
+    else { payload.max_tokens = 5; }
+    const res = UrlFetchApp.fetch(endpoint, {
+      method: "post",
+      contentType: "application/json",
+      muteHttpExceptions: true,
+      headers: { Authorization: "Bearer " + GROK_API_KEY },
+      payload: JSON.stringify(payload),
+    });
+    const code = res.getResponseCode();
+    if (code !== 200) return `فشلت (HTTP ${code}): ${res.getContentText().slice(0, 300)}`;
+    const data = JSON.parse(res.getContentText());
+    const text = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+    if (!text) return `HTTP 200 بس من غير رد فعلي (finish_reason: ${data.choices && data.choices[0] && data.choices[0].finish_reason}) — ${JSON.stringify(data).slice(0, 300)}`;
+    return `شغالة ✓ (${isGroq ? "Groq" : "xAI"}, موديل ${model})`;
+  } catch (err) {
+    return "استثناء: " + String(err);
+  }
 }
 
 
@@ -1053,6 +1399,35 @@ function uploadRegistrationPhoto_(photoBase64) {
 
 function getOrCreatePhotosFolder_() {
   const FOLDER_NAME = "DYS - صور المسجلين";
+  const existing = DriveApp.getFoldersByName(FOLDER_NAME);
+  if (existing.hasNext()) return existing.next();
+  return DriveApp.createFolder(FOLDER_NAME);
+}
+
+// Same idea as uploadRegistrationPhoto_ above, just its own Drive folder so
+// payment receipts don't get mixed in with personal photos.
+function uploadPaymentReceipt_(receiptBase64) {
+  if (!receiptBase64) return "";
+  try {
+    const raw = String(receiptBase64);
+    const commaIdx = raw.indexOf(",");
+    const base64 = commaIdx > -1 && raw.slice(0, commaIdx).indexOf("base64") > -1 ? raw.slice(commaIdx + 1) : raw;
+    const mimeMatch = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64/);
+    const mimeType = mimeMatch ? mimeMatch[1] : "image/jpeg";
+    const bytes = Utilities.base64Decode(base64);
+    const blob = Utilities.newBlob(bytes, mimeType, "receipt-" + new Date().getTime() + ".jpg");
+
+    const folder = getOrCreateReceiptsFolder_();
+    const file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return "https://drive.google.com/uc?export=view&id=" + file.getId();
+  } catch (err) {
+    return "";
+  }
+}
+
+function getOrCreateReceiptsFolder_() {
+  const FOLDER_NAME = "سند شباب الدلتا - إيصالات الدفع";
   const existing = DriveApp.getFoldersByName(FOLDER_NAME);
   if (existing.hasNext()) return existing.next();
   return DriveApp.createFolder(FOLDER_NAME);
@@ -1123,7 +1498,7 @@ function handleSubmit_(payload) {
     return jsonOutput_({ status: "error", message: errors.join(" | ") });
   }
 
-  const nationalId = String(payload.nationalId).trim();
+  const nationalId = String(payload.nationalId || "").trim();
 
   // ---- 4) duplicate guard (uses a lock so two near-simultaneous submits
   //         of the same ID can't both slip through) ----
@@ -1131,6 +1506,13 @@ function handleSubmit_(payload) {
   lock.waitLock(30000);
   try {
     if (isDuplicateNid_(nationalId, formId)) {
+      return jsonOutput_({ status: "duplicate" });
+    }
+    // No National ID to check against (off, or optional and left blank) —
+    // fall back to phone/WhatsApp/email so this doesn't just let anyone
+    // register over and over with nothing to stop them. See
+    // isDuplicateByOtherFields_ for exactly what it compares.
+    if (!nationalId && isDuplicateByOtherFields_(payload, formId)) {
       return jsonOutput_({ status: "duplicate" });
     }
 
@@ -1142,16 +1524,113 @@ function handleSubmit_(payload) {
     if (fc.photo && fc.photo.enabled && payload.photoBase64) {
       payload.photoUrl = uploadRegistrationPhoto_(payload.photoBase64);
     }
+    if (fc.receiptPhoto && fc.receiptPhoto.enabled && payload.receiptBase64) {
+      payload.receiptUrl = uploadPaymentReceipt_(payload.receiptBase64);
+    }
+
+    // Group/bundle offer ("عرض الصحاب"...) — payload.groupMembers is
+    // [{name, email}, ...], one entry per extra person the submitter typed
+    // in (see collectGroupMembers_ in dys_form.html). The submitter's OWN
+    // membership number becomes the shared group code, stamped onto their
+    // own row AND every friend's row below — this is what lets
+    // handleConfirmGroupPayment_ confirm the whole group in one click later.
+    const groupMembers = Array.isArray(payload.groupMembers) ? payload.groupMembers : [];
+    const groupTier = groupMembers.length
+      ? getGroupTiers_(formId).find(t => t.id === payload.groupTierId)
+      : null;
+    if (groupMembers.length) {
+      payload.customFields = payload.customFields || {};
+      payload.customFields.c_groupcode = membershipNo;
+      // Stored as a real "Group Offer" column (see buildRow_/HEADERS) so
+      // the sheet itself shows which offer someone took without having to
+      // cross-reference GROUP_TIERS — falls back to a generic label if the
+      // tier was renamed/deleted from Settings after this person registered.
+      payload.groupOfferLabel = groupTier ? groupTier.label : "عرض جماعة";
+    }
+
     const sheet = getSheet_(formId);
     const rowValues = buildRow_(payload, membershipNo);
     sheet.appendRow(rowValues);
     pushToFirestore_(membershipNo, rowValues); // best-effort mirror — never blocks registration
 
+    // Each named friend gets their OWN real row/membership number/QR/
+    // confirmation email — exactly like a normal registration, just built
+    // from the two things actually collected (name + email) instead of the
+    // full form. Silently skips any entry missing a name or a validly
+    // shaped email (the frontend's validateGroupMembers_ should already
+    // have caught that before submit) rather than failing the whole
+    // submission over one bad friend entry — the submitter's own
+    // registration must never be put at risk by a mistake in a friend's
+    // details. Also skips a friend email that exactly matches the
+    // submitter's own, or an EARLIER friend's, in this same submission —
+    // two rows sharing one inbox would otherwise both silently compete for
+    // the same confirmation/QR/payment emails.
+    const psIdx = HEADERS.indexOf("Payment Status");
+    const emailColIdx = HEADERS.indexOf("Email");
+    const cfColIdx = HEADERS.indexOf(CUSTOM_FIELDS_HEADER);
+    // One fresh read of what's actually in the sheet right now (includes
+    // the primary row just appended above) — used only to catch a friend
+    // who ALREADY has their own registration from before this submission.
+    // Without this, a friend who separately registered earlier (or is
+    // listed in two different group submissions) would get a brand-new
+    // duplicate row instead of being linked into this group.
+    const existingData = emailColIdx > -1 ? sheet.getDataRange().getValues() : [];
+    const usedEmails = new Set([String(payload.email || "").trim().toLowerCase()].filter(Boolean));
+    let groupMembersRegistered = 0;
+    groupMembers.forEach(member => {
+      const friendName = String((member && member.name) || "").trim();
+      const friendEmail = String((member && member.email) || "").trim();
+      if (!friendName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(friendEmail)) return;
+      const emailKey = friendEmail.toLowerCase();
+      if (usedEmails.has(emailKey)) return;
+      usedEmails.add(emailKey);
+
+      let existingRowIndex = -1;
+      if (emailColIdx > -1) {
+        for (let i = 1; i < existingData.length; i++) {
+          if (String(existingData[i][emailColIdx] || "").trim().toLowerCase() === emailKey) { existingRowIndex = i; break; }
+        }
+      }
+
+      if (existingRowIndex > -1) {
+        // Already has their own registration — link that row into THIS
+        // group instead of creating a duplicate. No new email/QR is sent:
+        // they already have their own from whenever they first registered.
+        if (cfColIdx > -1) {
+          let existingCustom = {};
+          try { existingCustom = JSON.parse(existingData[existingRowIndex][cfColIdx] || "{}"); } catch (e) { existingCustom = {}; }
+          existingCustom.c_groupcode = membershipNo;
+          sheet.getRange(existingRowIndex + 1, cfColIdx + 1).setValue(JSON.stringify(existingCustom));
+        }
+        groupMembersRegistered += 1;
+        return;
+      }
+
+      const friendMembershipNo = generateMembershipNumber_(cfg.membershipPrefix);
+      const friendPayload = {
+        name: friendName, email: friendEmail,
+        customFields: { c_groupcode: membershipNo },
+        groupOfferLabel: payload.groupOfferLabel,
+      };
+      const friendRow = buildRow_(friendPayload, friendMembershipNo);
+      if (psIdx > -1) friendRow[psIdx] = "قيد المراجعة"; // same "awaiting the group's payment" status as the submitter's own row
+
+      sheet.appendRow(friendRow);
+      pushToFirestore_(friendMembershipNo, friendRow);
+      queueConfirmationEmail_(friendPayload, friendMembershipNo, cfg);
+      groupMembersRegistered += 1;
+    });
+
     // ---- 6) confirmation email (best-effort — never fails the submission) ----
+    // Queued to go out a couple of seconds AFTER this response instead of
+    // sent right here — see queueConfirmationEmail_ for why (the QR image
+    // inside it comes from an external, occasionally slow free service, and
+    // there's no reason to make the member wait on the success screen for
+    // it when their own on-screen QR is already generated locally).
     let emailSent = false;
     const validEmail = payload.email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email.trim());
     if (validEmail) {
-      emailSent = sendConfirmationEmail_(payload, membershipNo, cfg);
+      emailSent = queueConfirmationEmail_(payload, membershipNo, cfg);
     }
 
     // ---- 7) certificate email (best-effort, only if auto-send is turned on
@@ -1161,7 +1640,7 @@ function handleSubmit_(payload) {
       certificateSent = sendCertificateEmail_(payload, membershipNo, formId);
     }
 
-    return jsonOutput_({ status: "success", membershipNo, emailSent, certificateSent });
+    return jsonOutput_({ status: "success", membershipNo, emailSent, certificateSent, groupMembersRegistered });
   } finally {
     lock.releaseLock();
   }
@@ -1179,10 +1658,21 @@ function validatePayload_(p, formId) {
   const isOn = (key) => fc[key] ? fc[key].enabled : true;
   const isReq = (key) => fc[key] ? fc[key].required : true;
 
-  // Name + National ID are always required — the whole duplicate-check and
-  // membership system depends on them, so they're not part of TOGGLEABLE_FIELDS.
+  // Name is always required — everything downstream (rows, emails, the
+  // dashboard table) assumes a registrant has a name. National ID used to be
+  // hardcoded the same way, but it's now a normal toggleable field (see
+  // TOGGLEABLE_FIELDS) — when it's off/optional and left blank, duplicate
+  // detection and the admin "resend email"/"send certificate" lookups (which
+  // key off National ID) simply won't have anything to match on for that
+  // registrant, same as any other disabled field.
   if (str(p.name).length < 3) errors.push("name");
-  if (!isValidEgyptianNationalId_(str(p.nationalId))) errors.push("nationalId");
+
+  if (isOn("nationalId")) {
+    const v = str(p.nationalId);
+    if (isReq("nationalId") || v !== "") {
+      if (!isValidEgyptianNationalId_(v)) errors.push("nationalId");
+    }
+  }
 
   if (isOn("age")) {
     const v = str(p.age);
@@ -1287,6 +1777,11 @@ function validatePayload_(p, formId) {
   // never blocks the registration even if it fails.
   if (isOn("photo") && isReq("photo") && !p.photoBase64) {
     errors.push("photo");
+  }
+
+  // Payment receipt — same shape as the photo check above.
+  if (isOn("receiptPhoto") && isReq("receiptPhoto") && !p.receiptBase64) {
+    errors.push("receiptPhoto");
   }
 
   // Video — unlike photo, this is uploaded straight from the browser to
@@ -1487,6 +1982,16 @@ function getRegConfig_(formId) {
   return {
     formId: formId || "",
     formTitle: props.getProperty(k("FORM_TITLE")) || "",
+    // Custom "trust note" line under the logo — falls back to the form's own
+    // built-in default text (see dys_form.html) when never set.
+    trustNote: props.getProperty(k("TRUST_NOTE")) || "",
+    // Custom subtitle line right under the form's title — same fallback rule.
+    formSubtitle: props.getProperty(k("FORM_SUBTITLE")) || "",
+    // Free-form overrides for ANY other text in the form's i18n dictionary —
+    // error/validation messages, button labels, anything with a data-i18n
+    // key that isn't already covered by its own dedicated setting above.
+    // See getI18nOverrides_ below and the "نصوص متقدمة" settings card.
+    i18nOverrides: getI18nOverrides_(formId),
     sheetBaseName: props.getProperty(k("SHEET_BASE_NAME")) || (formId ? formId : SHEET_NAME),
     startAt: props.getProperty(k("REG_START")) || "",
     endAt: props.getProperty(k("REG_END")) || "",
@@ -1500,15 +2005,21 @@ function getRegConfig_(formId) {
     certTemplateReady: !!props.getProperty(k("CERT_TEMPLATE_FILE_ID")),
     certTemplateName: props.getProperty(k("CERT_TEMPLATE_NAME")) || "",
     fieldConfig: getFieldConfig_(formId),
-    fieldDefs: buildFieldDefsForClient_(),
-    fieldSections: FIELD_SECTIONS,
+    fieldDefs: buildFieldDefsForClient_(formId),
+    fieldLabels: buildFieldLabelOverrides_(formId),
+    fieldSections: getSectionLabels_(formId),
     customFields: getCustomFields_(formId),
+    groupTiers: getGroupTiers_(formId),
     successActions: getSuccessActions_(formId),
     membershipPrefix: props.getProperty(k("MEMBERSHIP_PREFIX")) || MEMBERSHIP_PREFIX,
     // Custom confirmation email — falls back to the built-in generic text
     // (see sendConfirmationEmail_) when a form never set its own.
     confirmEmailSubject: props.getProperty(k("CONFIRM_EMAIL_SUBJECT")) || "",
     confirmEmailBody: props.getProperty(k("CONFIRM_EMAIL_BODY")) || "",
+    paymentConfirmedEmailSubject: props.getProperty(k("PAYMENT_CONFIRMED_EMAIL_SUBJECT")) || "",
+    paymentConfirmedEmailBody: props.getProperty(k("PAYMENT_CONFIRMED_EMAIL_BODY")) || "",
+    paymentReminderEmailSubject: props.getProperty(k("PAYMENT_REMINDER_EMAIL_SUBJECT")) || "",
+    paymentReminderEmailBody: props.getProperty(k("PAYMENT_REMINDER_EMAIL_BODY")) || "",
     archived: !!(getFormsRegistry_().find(f => f.id === formId) || {}).archived,
   };
 }
@@ -1519,15 +2030,36 @@ function getRegConfig_(formId) {
 // renders generically from this metadata (see buildDynamicStep_ in
 // dys_form.html). Sent to both the dashboard (to build the checkboxes) and
 // the public form (to build the extra-fields step).
-function buildFieldDefsForClient_() {
+function buildFieldDefsForClient_(formId) {
+  const fieldConfig = getFieldConfig_(formId);
   const defs = {};
   Object.keys(EXTRA_FIELDS).forEach(key => {
     const f = EXTRA_FIELDS[key];
-    defs[key] = { section: f.section, label: f.label, type: f.type, options: f.options || null };
+    const override = fieldConfig[key] && fieldConfig[key].label;
+    defs[key] = { section: f.section, label: override || f.label, type: f.type, options: f.options || null };
   });
   defs.photo = { section: PHOTO_FIELD.section, label: PHOTO_FIELD.label, type: PHOTO_FIELD.type, options: null };
   defs.video = { section: VIDEO_FIELD.section, label: VIDEO_FIELD.label, type: VIDEO_FIELD.type, options: null };
+  const receiptOverride = fieldConfig.receiptPhoto && fieldConfig.receiptPhoto.label;
+  defs.receiptPhoto = { section: RECEIPT_FIELD.section, label: receiptOverride || RECEIPT_FIELD.label, type: RECEIPT_FIELD.type, options: null };
   return defs;
+}
+
+// Renamed labels for the 10 hand-built fields (age, gender, phone... plus
+// "name") — these render from hardcoded HTML/i18n text on the form (see
+// TOGGLEABLE_FIELD_KEYS + FIELD_KEY_TO_I18N in dys_form.html), unlike
+// EXTRA_FIELDS/custom fields which already render generically from
+// server-sent label text. This is what makes renaming them possible at all
+// without editing that HTML directly.
+function buildFieldLabelOverrides_(formId) {
+  const labels = {};
+  const fieldConfig = getFieldConfig_(formId);
+  Object.keys(TOGGLEABLE_FIELDS).forEach(key => {
+    if (fieldConfig[key] && fieldConfig[key].label) labels[key] = fieldConfig[key].label;
+  });
+  const nameLabel = PropertiesService.getScriptProperties().getProperty(propKey_("NAME_LABEL", formId));
+  if (nameLabel) labels.name = nameLabel;
+  return labels;
 }
 
 // "before"  → now is earlier than startAt (registration hasn't opened yet)
@@ -1561,7 +2093,7 @@ const ACTIVITY_LOG_MAX_ROWS = 500; // trims oldest entries past this so the shee
 
 function logActivity_(accountName, action, details) {
   try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getSpreadsheet_();
     let log = ss.getSheetByName(ACTIVITY_LOG_SHEET_NAME);
     if (!log) {
       log = ss.insertSheet(ACTIVITY_LOG_SHEET_NAME);
@@ -1592,6 +2124,10 @@ function describeActionForLog_(payload) {
     case "sendCertificate": return `بعت شهادة لسجل واحد (${payload.membershipNo || payload.rowIndex || ""})`;
     case "sendCertificatesBulk": return "بعت شهادات لدفعة من الأعضاء";
     case "sendTestCertificate": return `بعت شهادة تجريبية لـ ${payload.testEmail || ""}`;
+    case "resendConfirmationEmail": return `أعاد إرسال إيميل التأكيد (${payload.nationalId || ""})`;
+    case "confirmPayment": return `${payload.confirmed ? "أكّد" : "ألغى تأكيد"} دفع (${payload.membershipNo || ""})`;
+    case "confirmGroupPayment": return `${payload.confirmed ? "أكّد" : "ألغى تأكيد"} دفع مجموعة كاملة (كود: ${payload.groupCode || ""})`;
+    case "sendPaymentReminders": return "بعت تذكير دفع جماعي";
     case "saveFieldConfig": return "عدّل إعدادات حقول الاستمارة";
     case "listAdminAccounts": return "شاف قائمة الحسابات";
     case "addAdminAccount": return `أضاف/عدّل حساب: ${payload.name || ""}`;
@@ -1608,7 +2144,7 @@ function describeActionForLog_(payload) {
 
 // action=getActivityLog — returns the most recent N entries, newest first.
 function handleGetActivityLog_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getSpreadsheet_();
   const log = ss.getSheetByName(ACTIVITY_LOG_SHEET_NAME);
   if (!log || log.getLastRow() < 2) return jsonOutput_({ status: "success", entries: [] });
   const data = log.getRange(2, 1, log.getLastRow() - 1, 4).getValues();
@@ -1636,7 +2172,7 @@ function handleExportExcel_(payload) {
 
     formatSheetForExport_(sheet);
 
-    const ssId = SpreadsheetApp.getActiveSpreadsheet().getId();
+    const ssId = getSpreadsheet_().getId();
     const gid = sheet.getSheetId();
     const url = `https://docs.google.com/spreadsheets/d/${ssId}/export?format=xlsx&gid=${gid}`;
     const token = ScriptApp.getOAuthToken();
@@ -1680,6 +2216,10 @@ const ACTION_PERMISSIONS = {
   sendCertificate: "manageCertificates",
   sendCertificatesBulk: "manageCertificates",
   sendTestCertificate: "manageCertificates",
+  resendConfirmationEmail: "manageCertificates",
+  confirmPayment: "manageCertificates",
+  confirmGroupPayment: "manageCertificates",
+  sendPaymentReminders: "manageCertificates",
   saveFieldConfig: "manageFields",
   listAdminAccounts: "manageAccounts",
   addAdminAccount: "manageAccounts",
@@ -1709,6 +2249,10 @@ function handleAdminAction_(payload) {
   if (payload.action === "sendCertificate") return logAndReturn_(account, payload, handleSendCertificate_(payload));
   if (payload.action === "sendCertificatesBulk") return logAndReturn_(account, payload, handleSendCertificatesBulk_(payload));
   if (payload.action === "sendTestCertificate") return logAndReturn_(account, payload, handleSendTestCertificate_(payload));
+  if (payload.action === "resendConfirmationEmail") return logAndReturn_(account, payload, handleResendConfirmationEmail_(payload));
+  if (payload.action === "confirmPayment") return logAndReturn_(account, payload, handleConfirmPayment_(payload));
+  if (payload.action === "confirmGroupPayment") return logAndReturn_(account, payload, handleConfirmGroupPayment_(payload));
+  if (payload.action === "sendPaymentReminders") return logAndReturn_(account, payload, handleSendPaymentReminders_(payload));
   if (payload.action === "saveFieldConfig") return logAndReturn_(account, payload, handleSaveFieldConfig_(payload));
   if (payload.action === "listAdminAccounts") return handleListAdminAccounts_(); // read-only, not logged — keeps the log focused on actual changes
   if (payload.action === "addAdminAccount") return logAndReturn_(account, payload, handleAddAdminAccount_(payload));
@@ -1863,11 +2407,32 @@ function handleSaveConfig_(payload) {
   const k = (base) => propKey_(base, formId);
 
   const formTitle = String(payload.formTitle || "").trim();
+  const trustNote = String(payload.trustNote || "").trim();
+  const formSubtitle = String(payload.formSubtitle || "").trim();
   const sheetBaseName = String(payload.sheetBaseName || "").trim();
   const startAt = String(payload.startAt || "").trim();
   const endAt = String(payload.endAt || "").trim();
 
   props.setProperty(k("FORM_TITLE"), formTitle);
+  props.setProperty(k("TRUST_NOTE"), trustNote);
+  props.setProperty(k("FORM_SUBTITLE"), formSubtitle);
+  // "نصوص متقدمة" — the admin pastes a JSON object like {"btnNext": "كمل"}.
+  // Sent as a JSON STRING (not a parsed object) since it's typed free-form
+  // into a textarea — invalid JSON is silently ignored (keeps whatever was
+  // saved before) rather than wiping existing overrides over one typo.
+  if (typeof payload.i18nOverrides !== "undefined") {
+    try {
+      const parsed = JSON.parse(payload.i18nOverrides || "{}");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const cleaned = {};
+        Object.keys(parsed).forEach(key => {
+          const v = String(parsed[key] || "").trim();
+          if (v) cleaned[key] = v;
+        });
+        props.setProperty(k("I18N_OVERRIDES"), JSON.stringify(cleaned));
+      }
+    } catch (e) { /* invalid JSON typed in — leave the previously saved overrides untouched */ }
+  }
   if (sheetBaseName) props.setProperty(k("SHEET_BASE_NAME"), sheetBaseName);
   props.setProperty(k("REG_START"), startAt);
   props.setProperty(k("REG_END"), endAt);
@@ -1895,6 +2460,18 @@ function handleSaveConfig_(payload) {
   }
   if (typeof payload.confirmEmailBody !== "undefined") {
     props.setProperty(k("CONFIRM_EMAIL_BODY"), String(payload.confirmEmailBody || "").trim());
+  }
+  if (typeof payload.paymentConfirmedEmailSubject !== "undefined") {
+    props.setProperty(k("PAYMENT_CONFIRMED_EMAIL_SUBJECT"), String(payload.paymentConfirmedEmailSubject || "").trim());
+  }
+  if (typeof payload.paymentConfirmedEmailBody !== "undefined") {
+    props.setProperty(k("PAYMENT_CONFIRMED_EMAIL_BODY"), String(payload.paymentConfirmedEmailBody || "").trim());
+  }
+  if (typeof payload.paymentReminderEmailSubject !== "undefined") {
+    props.setProperty(k("PAYMENT_REMINDER_EMAIL_SUBJECT"), String(payload.paymentReminderEmailSubject || "").trim());
+  }
+  if (typeof payload.paymentReminderEmailBody !== "undefined") {
+    props.setProperty(k("PAYMENT_REMINDER_EMAIL_BODY"), String(payload.paymentReminderEmailBody || "").trim());
   }
 
   // Success-screen buttons ("🎉 خيارات بعد التسجيل"). Only touched when the
@@ -1924,7 +2501,7 @@ function handleSaveConfig_(payload) {
 // scoped to the given formId (see propKey_ above).
 function startNewCycle_(base, formId) {
   const props = PropertiesService.getScriptProperties();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getSpreadsheet_();
   const k = (b) => propKey_(b, formId);
 
   let cycle = Number(props.getProperty(k("CYCLE_NUMBER")) || "0") + 1;
@@ -2346,6 +2923,10 @@ function handleSendCertificate_(payload) {
   const headers = data[0] || [];
   const nidCol = headers.indexOf("National ID");
   const nationalId = String(payload.nationalId || "").trim();
+  // National ID is optional now (see TOGGLEABLE_FIELDS) — an empty value must
+  // never match a row that also happens to have a blank ID, or this could
+  // send someone else's certificate to a totally unrelated registrant.
+  if (!nationalId) return jsonOutput_({ status: "error", message: "السجل ده مسجّل من غير رقم قومي — استخدم صف الجدول مباشرة." });
   const row = data.slice(1).find(r => String(r[nidCol]).trim() === nationalId);
   if (!row) return jsonOutput_({ status: "error", message: "السجل مش موجود في الشيت ده." });
 
@@ -2359,6 +2940,195 @@ function handleSendCertificate_(payload) {
     return jsonOutput_({ status: "error", message: "فشل إرسال الشهادة: " + String(err) });
   }
 }
+
+// action=resendConfirmationEmail — dashboard's "🔁 إعادة إرسال إيميل
+// التأكيد (والـ QR)" button on a single member's detail view. Same
+// row-lookup shape as handleSendCertificate_ above, but resends the plain
+// confirmation email (with its inline check-in QR) instead of the full
+// certificate. Sent synchronously (not through queueConfirmationEmail_)
+// since this is a one-off admin click, not the public form's submit path —
+// the admin is already waiting on a result either way, so there's no success
+// screen to keep snappy here, and a synchronous, immediately-known
+// success/failure result matches how every other resend/send button in the
+// dashboard already behaves.
+function handleResendConfirmationEmail_(payload) {
+  const formId = String(payload.formId || "").trim();
+  const cfg = getRegConfig_(formId);
+  const sheet = findSheet_(payload.sheet || cfg.activeSheetName);
+  if (!sheet) return jsonOutput_({ status: "error", message: "الشيت مش موجود." });
+
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0] || [];
+  const nidCol = headers.indexOf("National ID");
+  const nationalId = String(payload.nationalId || "").trim();
+  // Same reasoning as handleSendCertificate_ above — never let a blank ID
+  // match another registrant's blank ID.
+  if (!nationalId) return jsonOutput_({ status: "error", message: "السجل ده مسجّل من غير رقم قومي — استخدم صف الجدول مباشرة." });
+  const row = data.slice(1).find(r => String(r[nidCol]).trim() === nationalId);
+  if (!row) return jsonOutput_({ status: "error", message: "السجل مش موجود في الشيت ده." });
+
+  const person = rowToPerson_(headers, row);
+  if (!person.email) return jsonOutput_({ status: "error", message: "السجل ده مفيهوش إيميل." });
+
+  const sent = sendConfirmationEmail_(person, person.membershipNo, cfg);
+  return sent
+    ? jsonOutput_({ status: "success", message: "اتبعت إيميل التأكيد تاني ✓" })
+    : jsonOutput_({ status: "error", message: "فشل إرسال الإيميل — جرب تاني كمان شوية." });
+}
+
+// action=confirmPayment — dashboard's payment-review toggle (checks the
+// uploaded receipt image, then marks/unmarks a member's "Payment Status"
+// cell). Looked up by Membership No instead of National ID — unlike the two
+// actions above, this needs to work for EVERY member regardless of whether
+// they even have a National ID (see isDuplicateByOtherFields_'s reasoning
+// for why that field can be blank now).
+function handleConfirmPayment_(payload) {
+  const formId = String(payload.formId || "").trim();
+  const cfg = getRegConfig_(formId);
+  const sheet = findSheet_(payload.sheet || cfg.activeSheetName);
+  if (!sheet) return jsonOutput_({ status: "error", message: "الشيت مش موجود." });
+
+  const membershipNo = String(payload.membershipNo || "").trim();
+  if (!membershipNo) return jsonOutput_({ status: "error", message: "رقم العضوية مطلوب." });
+
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0] || [];
+  const msCol = headers.indexOf("Membership No");
+  let rowIndex = -1;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][msCol]).trim() === membershipNo) { rowIndex = i; break; }
+  }
+  if (rowIndex === -1) return jsonOutput_({ status: "error", message: "السجل مش موجود في الشيت ده." });
+
+  let statusCol = headers.indexOf("Payment Status");
+  if (statusCol === -1) {
+    // Sheet predates this feature — heal it now so there's somewhere to
+    // write, then re-read the real column position (same pattern as
+    // handleCheckin_'s "Checked In At" self-heal).
+    healSheetHeaders_(sheet);
+    statusCol = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].indexOf("Payment Status");
+    if (statusCol === -1) return jsonOutput_({ status: "error", message: "تعذر تجهيز عمود حالة الدفع — جرب تاني كمان شوية." });
+  }
+
+  const newStatus = payload.confirmed ? "تم التأكيد ✓" : "قيد المراجعة";
+  sheet.getRange(rowIndex + 1, statusCol + 1).setValue(newStatus);
+
+  // Only email on the way IN to "confirmed" — un-confirming (a correction)
+  // shouldn't notify anyone. Best-effort: an email hiccup here must never
+  // undo/fail the status change the admin just made.
+  let emailSent = false;
+  if (payload.confirmed) {
+    const person = rowToPerson_(headers, data[rowIndex]);
+    if (person.email) emailSent = sendPaymentConfirmedEmail_(person, membershipNo, cfg);
+  }
+  return jsonOutput_({ status: "success", paymentStatus: newStatus, emailSent });
+}
+
+// action=confirmGroupPayment — dashboard's "✅ تأكيد دفع المجموعة كلها"
+// button. Confirms payment for EVERY registrant in this sheet whose
+// "c_groupcode" custom-field answer exactly matches the given code (see the
+// seed in getCustomFields_ above) — one click for a group/bundle offer
+// instead of hunting down each member individually. Exact string match on
+// purpose (not fuzzy name matching): a wrong confirmation here means
+// telling someone their payment went through when it didn't, so this only
+// ever acts on a code the registrants themselves deliberately agreed on and
+// typed identically, never a guess.
+function handleConfirmGroupPayment_(payload) {
+  const formId = String(payload.formId || "").trim();
+  const cfg = getRegConfig_(formId);
+  const sheet = findSheet_(payload.sheet || cfg.activeSheetName);
+  if (!sheet) return jsonOutput_({ status: "error", message: "الشيت مش موجود." });
+
+  const groupCode = String(payload.groupCode || "").trim();
+  if (!groupCode) return jsonOutput_({ status: "error", message: "كود المجموعة مطلوب." });
+
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0] || [];
+  const customCol = headers.indexOf(CUSTOM_FIELDS_HEADER);
+  if (customCol === -1) return jsonOutput_({ status: "error", message: "مفيش حقول مخصصة في الشيت ده." });
+
+  let statusCol = headers.indexOf("Payment Status");
+  if (statusCol === -1) {
+    healSheetHeaders_(sheet);
+    statusCol = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].indexOf("Payment Status");
+    if (statusCol === -1) return jsonOutput_({ status: "error", message: "تعذر تجهيز عمود حالة الدفع — جرب تاني كمان شوية." });
+  }
+
+  const newStatus = payload.confirmed ? "تم التأكيد ✓" : "قيد المراجعة";
+  let matched = 0, emailsSent = 0;
+  for (let i = 1; i < data.length; i++) {
+    let customData = {};
+    try { customData = JSON.parse(data[i][customCol] || "{}"); } catch (e) { continue; }
+    if (String(customData.c_groupcode || "").trim() !== groupCode) continue;
+
+    matched += 1;
+    sheet.getRange(i + 1, statusCol + 1).setValue(newStatus);
+    if (payload.confirmed) {
+      const person = rowToPerson_(headers, data[i]);
+      if (person.email && sendPaymentConfirmedEmail_(person, person.membershipNo, cfg)) emailsSent += 1;
+    }
+  }
+
+  if (!matched) return jsonOutput_({ status: "error", message: `مفيش حد في الشيت ده كاتب الكود "${groupCode}".` });
+  return jsonOutput_({ status: "success", paymentStatus: newStatus, matched, emailsSent });
+}
+
+// Sent by handleSendPaymentReminders_ below — same optional subject/body
+// override pattern as sendConfirmationEmail_/sendPaymentConfirmedEmail_.
+function sendPaymentReminderEmail_(p, membershipNo, cfg) {
+  try {
+    if (!p.email) return false;
+    const fill = (s) => s.replace(/\{\{name\}\}/g, p.name || "").replace(/\{\{membershipNo\}\}/g, membershipNo || "");
+    const subject = (cfg && cfg.paymentReminderEmailSubject)
+      ? fill(cfg.paymentReminderEmailSubject)
+      : "تذكير بإتمام الدفع — سند شباب الدلتا";
+    const bodyText = (cfg && cfg.paymentReminderEmailBody)
+      ? fill(cfg.paymentReminderEmailBody)
+      : `أهلًا ${p.name}،\n\n` +
+        `ده تذكير بسيط إن دفعك لسه معلّق/لسه بنراجعه — لو كنت دفعت بالفعل وبعت الإيصال، بلاش قلق هنراجعه ونأكدلك قريب.\n` +
+        `لو لسه ماكملتش الدفع، يفضل تكمله في أقرب وقت.\n` +
+        `رقم عضويتك: ${membershipNo}\n\n` +
+        `تحياتنا،\nفريق سند شباب الدلتا`;
+    sendEmail_(p.email.trim(), subject, bodyText);
+    return true;
+  } catch (err) {
+    console.error("Payment reminder email failed:", err);
+    return false;
+  }
+}
+
+// action=sendPaymentReminders — dashboard's "📧 ابعت تذكير لكل اللي لسه
+// معلّقين" bulk button. Emails everyone in the given (or currently active)
+// sheet/cycle whose Payment Status is anything OTHER than "تم التأكيد ✓"
+// (blank OR "قيد المراجعة" both count — either way they aren't confirmed
+// yet) and who has an email on file. Best-effort per row, same as
+// handleSendCertificatesBulk_ — one bad address never stops the rest.
+function handleSendPaymentReminders_(payload) {
+  const formId = String(payload.formId || "").trim();
+  const cfg = getRegConfig_(formId);
+  const sheet = findSheet_(payload.sheet || cfg.activeSheetName);
+  if (!sheet) return jsonOutput_({ status: "error", message: "الشيت مش موجود." });
+
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0] || [];
+  const statusCol = headers.indexOf("Payment Status");
+  if (statusCol === -1) {
+    return jsonOutput_({ status: "error", message: "الشيت ده مفيهوش عمود حالة دفع — حد لسه ما استخدمش خاصية صورة الإيصال فيه." });
+  }
+
+  let sent = 0, failed = 0, skippedNoEmail = 0, skippedAlreadyPaid = 0;
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row.some(c => String(c).trim() !== "")) continue; // blank trailing row
+    if (String(row[statusCol] || "").trim() === "تم التأكيد ✓") { skippedAlreadyPaid += 1; continue; }
+    const person = rowToPerson_(headers, row);
+    if (!person.email) { skippedNoEmail += 1; continue; }
+    if (sendPaymentReminderEmail_(person, person.membershipNo, cfg)) sent += 1; else failed += 1;
+  }
+
+  return jsonOutput_({ status: "success", sent, failed, skippedNoEmail, skippedAlreadyPaid });
+}
+
 
 // action=sendCertificatesBulk — sends to everyone with a valid email in the
 // given (or currently active) sheet/cycle. Best-effort per row: one failure
@@ -2427,7 +3197,7 @@ function getActiveSheetName_(formId) {
 // Looks up a sheet WITHOUT creating it. Used anywhere we must never silently
 // spawn a new empty tab just because someone passed an unexpected name.
 function findSheet_(name) {
-  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
+  return getSpreadsheet_().getSheetByName(name);
 }
 
 // Gets (and creates, if missing) the CURRENT active sheet for the given form
@@ -2437,7 +3207,7 @@ function findSheet_(name) {
 // the new Settings tab keep behaving exactly like before.
 function getSheet_(formId, nameOpt) {
   const name = nameOpt || getActiveSheetName_(formId);
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getSpreadsheet_();
   let sheet = ss.getSheetByName(name);
   if (!sheet) {
     sheet = ss.insertSheet(name);
@@ -2493,16 +3263,67 @@ function buildRow_(p, membershipNo) {
   ];
   const extraRow = EXTRA_HEADERS.map(h => str(p[HEADER_TO_EXTRA_FIELD[h]]));
   const customJson = JSON.stringify(p.customFields || {});
-  return legacyRow.concat(extraRow).concat([customJson]).concat([str(p.photoUrl), str(p.videoUrl)]);
+  // Order after this point: Photo URL, Video URL, Checked In At (always left
+  // blank here — only ever set later, by the check-in scanner), Receipt URL,
+  // Payment Status, Group Offer. The "" placeholder is deliberate: appendRow
+  // writes positionally, so anything AFTER a column this function doesn't
+  // set (like "Checked In At") needs an explicit blank of its own, not just
+  // omission — omission only works for trailing columns.
+  //
+  // Group Offer: the chosen tier's LABEL (e.g. "عرض الصحاب (٣ أفراد)"), not
+  // its id — so the sheet itself is readable at a glance without needing to
+  // cross-reference GROUP_TIERS. Set by handleSubmit_ for both the
+  // submitter's own row and every friend's row it creates alongside it (see
+  // groupMembers handling there) — a plain registrant with no group tier
+  // just gets "" here, same as any other unused optional field.
+  const paymentStatus = str(p.receiptUrl) ? "قيد المراجعة" : "";
+  return legacyRow.concat(extraRow).concat([customJson]).concat([str(p.photoUrl), str(p.videoUrl), "", str(p.receiptUrl), paymentStatus, str(p.groupOfferLabel)]);
 }
 
 function isDuplicateNid_(nationalId, formId) {
+  // National ID is now an optional field (see TOGGLEABLE_FIELDS) — an empty
+  // ID must never be treated as a "duplicate" of every other registrant who
+  // also left it blank, or the second person ever to register without one
+  // would get wrongly rejected.
+  if (!nationalId) return false;
   const sheet = getSheet_(formId);
   const data = sheet.getDataRange().getValues();
   const headers = data[0] || [];
   const nidCol = headers.indexOf("National ID");
   if (nidCol === -1) return false;
   return data.slice(1).some(row => String(row[nidCol]).trim() === nationalId);
+}
+
+// Fallback duplicate-guard for when National ID is off (disabled, or
+// optional and left blank) — WITHOUT it there'd be no unique key at all to
+// catch the same person registering twice. Checks phone, WhatsApp, and
+// email instead: if ANY of those a registrant actually filled in matches an
+// existing row's value for that same field, the submission is rejected as a
+// duplicate exactly like a repeated National ID would be. Only ever called
+// when nationalId is blank — with a real National ID present that's still
+// the single authoritative check (this never runs alongside it), so two
+// genuinely different people who happen to share a household phone/email
+// can't get wrongly rejected as long as National ID is actually in use.
+function isDuplicateByOtherFields_(payload, formId) {
+  const checks = [
+    { header: "Phone", value: String(payload.phone || "").trim() },
+    { header: "Whatsapp", value: String(payload.whatsapp || "").trim() },
+    { header: "Email", value: String(payload.email || "").trim().toLowerCase() },
+  ].filter(c => c.value);
+  if (!checks.length) return false; // nothing filled in to even compare — can't tell, so let it through
+
+  const sheet = getSheet_(formId);
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0] || [];
+  checks.forEach(c => { c.col = headers.indexOf(c.header); });
+  const usable = checks.filter(c => c.col > -1);
+  if (!usable.length) return false;
+
+  return data.slice(1).some(row => usable.some(c => {
+    const rowVal = String(row[c.col] || "").trim();
+    if (!rowVal) return false;
+    return c.header === "Email" ? rowVal.toLowerCase() === c.value : rowVal === c.value;
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -2546,6 +3367,12 @@ function rowToMember_(headers, row) {
     role: get("Role in Entity"),
     faculty: get("Faculty"),
     photoUrl: get("Photo URL"),
+    // "" when the sheet has no Payment Status column at all (this form
+    // never turned on the receipt-upload field) — hasPaymentField lets the
+    // check-in scanner tell that apart from "column exists but still blank",
+    // so it only ever shows a payment note for forms actually using it.
+    paymentStatus: get("Payment Status"),
+    hasPaymentField: headers.indexOf("Payment Status") > -1,
   };
 }
 
@@ -2554,7 +3381,7 @@ function rowToMember_(headers, row) {
 // to only that form's own sheets/cycles (matched the same way
 // handleListCycles_ matches them — by sheetBaseName).
 function findMemberRowInAllCycles_(code, formId) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getSpreadsheet_();
   const cfg = getRegConfig_(formId || "");
   const activeName = cfg.activeSheetName;
 
@@ -2614,6 +3441,76 @@ function handleVerifyMember_(e) {
   });
 }
 
+// action=checkMyStatus (GET, PUBLIC — no password) — the "هل دفعي اتأكد؟"
+// self-service page (dys_status.html). Deliberately requires BOTH the
+// membership number AND the email/phone/WhatsApp number that was used to
+// register, not just the membership number alone — membership numbers are
+// sequential (DYS-000001, DYS-000002, ...) and easy to guess/enumerate, so
+// a lookup by number alone would let anyone harvest every registrant's name
+// and payment status just by counting up. Requiring the matching contact
+// detail too means only someone who actually registered (or was told their
+// own details by whoever did) can look themselves up. A wrong/missing
+// verifier and a genuinely nonexistent code get the EXACT same "not_found"
+// response — never distinguishing the two — so this can't be used as an
+// oracle to confirm which membership numbers are real.
+function handleCheckMyStatus_(e) {
+  const code = extractMembershipNo_(e.parameter.code || "");
+  const verifier = String(e.parameter.verify || "").trim().toLowerCase();
+  if (!code || !verifier) {
+    return jsonOutput_({ status: "error", message: "اكتب رقم العضوية، والإيميل أو رقم الهاتف اللي سجّلت بيهم." });
+  }
+
+  // Blunt global rate limit — Apps Script doesn't expose the caller's IP
+  // address, so a real per-visitor limit isn't possible here; this instead
+  // caps TOTAL checkMyStatus calls across every visitor combined to make an
+  // automated script trying lots of code+verify combinations back-to-back
+  // meaningfully slower, without noticeably affecting a normal person
+  // checking their own status once or twice.
+  if (!checkStatusRateLimit_()) {
+    return jsonOutput_({ status: "error", message: "في محاولات كتير أوي دلوقتي — استنى شوية وجرب تاني." });
+  }
+
+  const found = findMemberRowInAllCycles_(code, String(e.parameter.form || "").trim());
+  if (!found) return jsonOutput_({ status: "not_found" });
+
+  const get = (name) => {
+    const i = found.headers.indexOf(name);
+    return i > -1 ? String(found.row[i] || "").trim() : "";
+  };
+  const matches = verifier === get("Email").toLowerCase() || verifier === get("Phone") || verifier === get("Whatsapp");
+  if (!matches) return jsonOutput_({ status: "not_found" });
+
+  const hasPaymentField = found.headers.indexOf("Payment Status") > -1;
+  const paymentStatus = get("Payment Status");
+  const chkCol = found.headers.indexOf("Checked In At");
+  return jsonOutput_({
+    status: "success",
+    name: get("Name"),
+    membershipNo: get("Membership No"),
+    hasPaymentField,
+    paymentConfirmed: paymentStatus === "تم التأكيد ✓",
+    checkedIn: chkCol > -1 && !!found.row[chkCol],
+  });
+}
+
+// Global sliding-ish window: at most 30 checkMyStatus calls per rolling
+// minute, counted across every visitor combined (see the reasoning at its
+// call site in handleCheckMyStatus_ above). CacheService.getScriptCache()
+// is shared across every execution of this project, which is exactly what
+// a GLOBAL (not per-visitor) limit needs — Apps Script doesn't expose the
+// caller's IP address, so a real per-visitor limit isn't achievable here.
+function checkStatusRateLimit_() {
+  try {
+    const cache = CacheService.getScriptCache();
+    const bucketKey = "CHECK_STATUS_RATE_" + Math.floor(Date.now() / 60000);
+    const current = Number(cache.get(bucketKey) || "0") + 1;
+    cache.put(bucketKey, String(current), 90); // a little past the minute, so a bucket never lingers once its minute has clearly passed
+    return current <= 30;
+  } catch (err) {
+    return true; // cache hiccup must never block a real person checking their own status
+  }
+}
+
 // action=checkin (POST) — payload: {password, code, formId}. Marks the
 // member as arrived RIGHT NOW, unless they're already checked in (returns
 // their original check-in time instead of overwriting it — scanning
@@ -2664,7 +3561,7 @@ function handleCheckin_(payload) {
 // sheet, so numbering picks up naturally even if you're migrating from an
 // older sheet.
 //
-// `prefix` defaults to MEMBERSHIP_PREFIX ("DYS") — a form can use its own
+// `prefix` defaults to MEMBERSHIP_PREFIX ("OSH") — a form can use its own
 // prefix instead (see cfg.membershipPrefix / the "بادئة رقم العضوية" field
 // in Settings) so e.g. "HR-000045" and "DYS-000045" can coexist without
 // colliding; each prefix keeps its own independent counter.
@@ -2677,7 +3574,10 @@ function handleCheckin_(payload) {
 // re-registering a SECOND time within the same form's CURRENT active
 // sheet; this function is what makes an ID persistent ACROSS forms.)
 function findExistingMembershipNo_(nationalId) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  // Same reasoning as isDuplicateNid_ above — a blank ID must never match
+  // another registrant's blank ID and hand out their membership number.
+  if (!nationalId) return null;
+  const ss = getSpreadsheet_();
   const sheets = ss.getSheets().filter(sh => sh.getName() !== ACTIVITY_LOG_SHEET_NAME);
 
   for (const sh of sheets) {
@@ -2707,7 +3607,7 @@ function generateMembershipNumber_(prefix) {
   lock.waitLock(30000);
   try {
     const used = new Set();
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const ss = getSpreadsheet_();
     const numRe = new RegExp("^" + usePrefix + "-(\\d+)$");
 
     ss.getSheets().forEach(sh => {
@@ -2742,20 +3642,50 @@ function generateMembershipNumber_(prefix) {
 // Uses the form's own custom subject/body if it set one (Settings ▸ نص
 // إيميل التأكيد), with {{name}} and {{membershipNo}} placeholders — falls
 // back to the built-in generic Arabic text otherwise.
+//
+// Also embeds a QR code of the membership number directly in the email
+// (as an inline cid: image, not a remote link — so it still shows up even
+// if the recipient's mail client blocks external images, and works
+// offline once the email is downloaded). On event day, the check-in
+// scanner (dys_checkin.html) reads this exact code — see
+// extractMembershipNo_() in this file, which is prefix-agnostic and pulls
+// the membership number out of whatever text the QR encodes.
 function sendConfirmationEmail_(p, membershipNo, cfg) {
   try {
     const fill = (s) => s.replace(/\{\{name\}\}/g, p.name || "").replace(/\{\{membershipNo\}\}/g, membershipNo || "");
     const subject = (cfg && cfg.confirmEmailSubject)
       ? fill(cfg.confirmEmailSubject)
       : "تأكيد التسجيل — سند شباب الدلتا";
-    const body = (cfg && cfg.confirmEmailBody)
+    const bodyText = (cfg && cfg.confirmEmailBody)
       ? fill(cfg.confirmEmailBody)
       : `أهلًا ${p.name}،\n\n` +
         `شكرًا لتسجيلك في سند شباب الدلتا.\n` +
         `رقم عضويتك هو: ${membershipNo}\n\n` +
         `هيتم التواصل معاك قريبًا من فريق اللجنة.\n\n` +
         `تحياتنا،\nفريق سند شباب الدلتا`;
-    sendEmail_(p.email.trim(), subject, body);
+
+    // Best-effort: a QR image failure (network hiccup, qrserver.com down)
+    // must NEVER block the confirmation email itself from going out.
+    const qrBlob = fetchQrCodeBlob_(membershipNo);
+
+    if (!qrBlob) {
+      // No QR available — send exactly like before, plain text only.
+      sendEmail_(p.email.trim(), subject, bodyText);
+      return true;
+    }
+
+    qrBlob.setName("checkin-qr.png");
+    const htmlBody =
+      `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;font-size:15px;color:#222;line-height:1.8;">` +
+      `<p>${bodyText.replace(/\n/g, "<br>")}</p>` +
+      `<div style="text-align:center;margin:22px 0;padding:18px;border:2px dashed #1668a0;border-radius:14px;background:#f7fafc;">` +
+      `<p style="margin:0 0 10px;font-weight:bold;color:#0e3c5c;">كود الدخول — اعرضه يوم الإيفنت عشان نسجّل حضورك</p>` +
+      `<img src="cid:checkinQr" width="220" height="220" alt="QR كود الدخول" style="display:block;margin:0 auto;">` +
+      `<p style="margin:12px 0 0;font-size:13px;color:#666;">أو رقم العضوية يدويًا: <strong>${membershipNo}</strong></p>` +
+      `</div>` +
+      `</div>`;
+
+    sendEmail_(p.email.trim(), subject, bodyText, { htmlBody, inlineImages: { checkinQr: qrBlob } });
     return true;
   } catch (err) {
     console.error("Email send failed:", err);
@@ -2763,6 +3693,114 @@ function sendConfirmationEmail_(p, membershipNo, cfg) {
   }
 }
 
+// Sent from handleConfirmPayment_ above, only when an admin marks a
+// member's payment as confirmed (never on un-confirm). Same optional
+// subject/body override pattern as sendConfirmationEmail_ — {{name}} and
+// {{membershipNo}} get filled in either way.
+function sendPaymentConfirmedEmail_(p, membershipNo, cfg) {
+  try {
+    if (!p.email) return false;
+    const fill = (s) => s.replace(/\{\{name\}\}/g, p.name || "").replace(/\{\{membershipNo\}\}/g, membershipNo || "");
+    const subject = (cfg && cfg.paymentConfirmedEmailSubject)
+      ? fill(cfg.paymentConfirmedEmailSubject)
+      : "تأكيد استلام الدفع — سند شباب الدلتا";
+    const bodyText = (cfg && cfg.paymentConfirmedEmailBody)
+      ? fill(cfg.paymentConfirmedEmailBody)
+      : `أهلًا ${p.name}،\n\n` +
+        `بنأكدلك إننا استلمنا دفعتك بنجاح ✅\n` +
+        `رقم عضويتك: ${membershipNo}\n\n` +
+        `شكرًا ليك ومستنينك في الإيفنت!\n\n` +
+        `تحياتنا،\nفريق سند شباب الدلتا`;
+    sendEmail_(p.email.trim(), subject, bodyText);
+    return true;
+  } catch (err) {
+    console.error("Payment confirmation email failed:", err);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Async confirmation-email queue — exists ONLY so doPost() can respond to the
+// member immediately after appendRow() instead of making their browser sit
+// on the success screen while sendConfirmationEmail_() runs. The slow part
+// is fetchQrCodeBlob_()'s call to the free, rate-limited api.qrserver.com —
+// a single external HTTP round trip that has nothing to do with the
+// registration itself and can occasionally take a very long time to answer.
+// Moving it a couple of seconds later (via a one-off trigger) means the
+// member's own success screen (name, membership number, their OWN
+// client-side QR from renderMemberQr_ in dys_form.html) shows up instantly;
+// the email with the check-in QR just lands in their inbox shortly after.
+//
+// Only the tiny handful of fields sendConfirmationEmail_ actually reads
+// (name, email, the two optional custom subject/body strings) are queued —
+// NOT the full registration payload — because PropertiesService caps each
+// stored value at 9KB, and the full payload can carry a base64 photo/video
+// URL or other large fields that would blow past that.
+const PENDING_CONF_EMAIL_KEYS_PROP = "PENDING_CONF_EMAIL_KEYS";
+
+function queueConfirmationEmail_(p, membershipNo, cfg) {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const slimPayload = { name: p.name || "", email: p.email };
+    const slimCfg = { confirmEmailSubject: cfg && cfg.confirmEmailSubject, confirmEmailBody: cfg && cfg.confirmEmailBody };
+    const key = "PENDING_CONF_EMAIL_" + membershipNo + "_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
+    props.setProperty(key, JSON.stringify({ p: slimPayload, membershipNo: membershipNo, cfg: slimCfg }));
+
+    const raw = props.getProperty(PENDING_CONF_EMAIL_KEYS_PROP);
+    const keys = raw ? JSON.parse(raw) : [];
+    keys.push(key);
+    props.setProperty(PENDING_CONF_EMAIL_KEYS_PROP, JSON.stringify(keys));
+
+    // A one-off trigger a couple of seconds out. If several registrations
+    // land close together this may create more than one of these — harmless,
+    // since processQueuedConfirmationEmails_ below drains (and locks) the
+    // WHOLE pending list every time it runs, so any extra trigger just finds
+    // nothing left to do and removes itself.
+    ScriptApp.newTrigger("processQueuedConfirmationEmails_").timeBased().after(2000).create();
+    return true; // queued — best-effort, same meaning "emailSent" always had
+  } catch (err) {
+    // Most likely cause: this deployment hasn't been re-authorized yet with
+    // the trigger-creation permission this needs (see appsscript.json —
+    // script.scriptapp scope). Fall back to the old synchronous send so the
+    // member never loses their confirmation email over it either way.
+    console.error("queueConfirmationEmail_ failed, sending synchronously instead:", err);
+    return sendConfirmationEmail_(p, membershipNo, cfg);
+  }
+}
+
+function processQueuedConfirmationEmails_() {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+    const props = PropertiesService.getScriptProperties();
+    const raw = props.getProperty(PENDING_CONF_EMAIL_KEYS_PROP);
+    const keys = raw ? JSON.parse(raw) : [];
+    keys.forEach(key => {
+      const itemRaw = props.getProperty(key);
+      if (!itemRaw) return;
+      try {
+        const item = JSON.parse(itemRaw);
+        sendConfirmationEmail_(item.p, item.membershipNo, item.cfg);
+      } catch (err) {
+        console.error("Queued confirmation email failed:", err);
+      } finally {
+        props.deleteProperty(key);
+      }
+    });
+    props.deleteProperty(PENDING_CONF_EMAIL_KEYS_PROP);
+  } finally {
+    lock.releaseLock();
+  }
+
+  // Self-cleanup: remove every one-off trigger pointing at this function
+  // (this run's own, plus any redundant extras from near-simultaneous
+  // registrations) now that the queue has been fully drained under lock.
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === "processQueuedConfirmationEmails_") {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -3032,7 +4070,7 @@ function handleReviewAccess_(e, approve) {
 
   return HtmlService.createHtmlOutput(
     `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;max-width:480px;margin:60px auto;padding:24px;border:1px solid #ddd;border-radius:12px;text-align:center;">` +
-    `<h2 style="color:#16321f;">سند شباب الدلتا</h2><p style="font-size:15px;color:#333;">${message}</p></div>`
+    `<h2 style="color:#0d2438;">سند شباب الدلتا</h2><p style="font-size:15px;color:#333;">${message}</p></div>`
   );
 }
 
@@ -3172,10 +4210,11 @@ function testGroqNow() {
     muteHttpExceptions: true,
     headers: { Authorization: "Bearer " + GROK_API_KEY },
     payload: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
+      model: "openai/gpt-oss-120b", // llama-3.3-70b-versatile was decommissioned 16 Aug 2026
       messages: [{ role: "user", content: "قول أهلاً" }],
       temperature: 0.4,
-      max_tokens: 100,
+      max_completion_tokens: 800, // this model reasons invisibly first — see callGrok_'s comment for why a low max_tokens silently returns empty content
+      reasoning_effort: "low",
     }),
   });
   Logger.log("Status: " + res.getResponseCode());
