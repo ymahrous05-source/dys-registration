@@ -1447,6 +1447,7 @@
             <button type="button" id="printBtn">🖨️ طباعة</button>
             <button type="button" id="exportBtn">⬇ تصدير CSV سريع</button>
             <button type="button" id="exportExcelBtn">📊 تصدير Excel منسّق (.xlsx)</button>
+            <button type="button" id="sendPaymentRemindersBtn" title="بيبعت تذكير إيميل لكل اللي لسه دفعهم مش مؤكد (فاضي أو قيد المراجعة) في الشيت الحالي">📧 ابعت تذكير دفع للمعلّقين</button>
             <button type="button" id="copyPhonesBtn"
               title="بينسخ أرقام الموبايل بتاعة الصفوف الظاهرة حاليًا بعد الفلاتر، سطر تحت التاني — جاهزة تلصقها في قايمة واتساب">📋
               نسخ أرقام الموبايل</button>
@@ -1494,6 +1495,12 @@
           <div class="chart-card">
             <h3>أكثر 8 صفات داخل الكيان</h3><canvas id="chartRole"></canvas>
           </div>
+          <div class="chart-card">
+            <h3>متطوع قديم ولا عضو جديد؟</h3><canvas id="chartVolunteerStatus"></canvas>
+          </div>
+          <div class="chart-card">
+            <h3>عدد المسجلين في كل عرض جماعة</h3><canvas id="chartGroupOffers"></canvas>
+          </div>
         </div>
       </div>
 
@@ -1522,6 +1529,25 @@
               <input type="text" id="cfgFormTitle" placeholder="مثال: استمارة تسجيل سند شباب الدلتا 2026">
             </div>
             <div class="settings-field">
+              <label for="cfgTrustNote">جملة الثقة اللي تحت اللوجو (سيب فاضي = النص الافتراضي)</label>
+              <input type="text" id="cfgTrustNote" placeholder="مثال: جاهز تكون جزء من الحدث؟ سجّل بياناتك وخلّينا نشوفك هناك">
+            </div>
+            <div class="settings-field">
+              <label for="cfgFormSubtitle">السطر اللي تحت عنوان الاستمارة مباشرة (سيب فاضي = النص الافتراضي)</label>
+              <input type="text" id="cfgFormSubtitle" placeholder="مثال: GAP Event - Life Makers">
+            </div>
+            <div class="settings-field">
+              <label for="cfgI18nOverrides">نصوص متقدمة (رسايل الأخطاء، أسماء الأزرار، إلخ) — اختياري</label>
+              <p class="hint">للمستخدم المتقدم بس. اكتب كائن JSON بالشكل {"المفتاح": "النص الجديد"} — أي مفتاح
+                مش موجود هنا بيفضل بنصه الافتراضي زي ما هو. أشهر المفاتيح: <code>btnNext</code> (زرار التالي)،
+                <code>btnBack</code> (السابق)، <code>btnSubmit</code> (تأكيد الإرسال)، <code>errPhone</code>
+                (رسالة رقم الهاتف الغلط)، <code>errNid</code> (رسالة الرقم القومي الغلط)، <code>errEmail</code>
+                (رسالة الإيميل الغلط)، <code>submitDuplicate</code> (رسالة "مسجّل بالفعل")، <code>successTitle</code>
+                و<code>successBody</code> (عنوان ونص شاشة النجاح). سيب الخانة فاضية أو اكتب <code>{}</code> عشان
+                ترجع لكل النصوص الافتراضية.</p>
+              <textarea id="cfgI18nOverrides" rows="5" placeholder='{"btnNext": "كمل", "errPhone": "اكتب رقم هاتف مصري صح من فضلك"}'></textarea>
+            </div>
+            <div class="settings-field">
               <label for="cfgSheetBaseName">اسم الشيت الأساسي</label>
               <input type="text" id="cfgSheetBaseName" placeholder="مثال: Registrations">
             </div>
@@ -1548,6 +1574,22 @@
             <div class="settings-field">
               <label for="cfgConfirmEmailBody">نص إيميل التأكيد (سيب فاضي = النص الافتراضي)</label>
               <textarea id="cfgConfirmEmailBody" rows="5" placeholder="استخدم {{name}} للاسم و{{membershipNo}} لرقم العضوية"></textarea>
+            </div>
+            <div class="settings-field">
+              <label for="cfgPaymentConfirmedEmailSubject">عنوان إيميل تأكيد الدفع (سيب فاضي = النص الافتراضي)</label>
+              <input type="text" id="cfgPaymentConfirmedEmailSubject" placeholder="مثال: تأكيد استلام الدفع — حدث كذا">
+            </div>
+            <div class="settings-field">
+              <label for="cfgPaymentConfirmedEmailBody">نص إيميل تأكيد الدفع — بيتبعت لما تدوس "✅ تأكيد الدفع" في تفاصيل أي عضو (سيب فاضي = النص الافتراضي)</label>
+              <textarea id="cfgPaymentConfirmedEmailBody" rows="5" placeholder="استخدم {{name}} للاسم و{{membershipNo}} لرقم العضوية"></textarea>
+            </div>
+            <div class="settings-field">
+              <label for="cfgPaymentReminderEmailSubject">عنوان إيميل تذكير الدفع (سيب فاضي = النص الافتراضي)</label>
+              <input type="text" id="cfgPaymentReminderEmailSubject" placeholder="مثال: تذكير بإتمام الدفع — حدث كذا">
+            </div>
+            <div class="settings-field">
+              <label for="cfgPaymentReminderEmailBody">نص إيميل تذكير الدفع — بيتبعت لكل اللي لسه معلّقين لما تدوس زرار "📧 ابعت تذكير" في تبويب الجدول (سيب فاضي = النص الافتراضي)</label>
+              <textarea id="cfgPaymentReminderEmailBody" rows="5" placeholder="استخدم {{name}} للاسم و{{membershipNo}} لرقم العضوية"></textarea>
             </div>
             <div class="settings-actions">
               <button type="button" class="settings-btn primary" id="saveConfigBtn">حفظ الإعدادات</button>
@@ -1660,6 +1702,9 @@
                   <option value="telegram">تليجرام</option>
                   <option value="facebook">فيسبوك</option>
                   <option value="instagram">إنستجرام</option>
+                  <option value="email">إيميل — تواصل عن طريق الإيميل</option>
+                  <option value="wallet_copy">نسخ رقم محفظة (فودافون كاش/إنستاباي/أورنج كاش...)</option>
+                  <option value="text">جملة عادية (نص بس، من غير زرار)</option>
                   <option value="link">لينك عام (أي حاجة تانية)</option>
                 </select>
                 <input type="text" id="newSuccessActionLabel" placeholder="النص على الزرار (مثلاً: تواصل مع تيم الـ HR)">
@@ -1681,11 +1726,33 @@
 
           <div class="settings-card">
             <h3>🧩 حقول الاستمارة</h3>
-            <p class="hint">تحكم في أي حقول تظهر في استمارة التسجيل، وأي حقول منهم إجباري وأي حقول اختياري. حقلي "الاسم"
-              و"الرقم القومي" مش موجودين هنا لأنهم أساسيين للنظام (منع التكرار ورقم العضوية بيعتمدوا عليهم) وهيفضلوا
-              ظاهرين وإجباريين دايمًا. أي قسم مفيهوش ولا حقل شغال (لا من دول ولا من الحقول المخصصة تحت) بيختفي من
-              الاستمارة تلقائيًا — مش هيظهر كصفحة فاضية.</p>
+            <p class="hint">تحكم في أي حقول تظهر في استمارة التسجيل، أي حقول منهم إجباري وأي حقول اختياري، وتقدر
+              كمان تغيّر اسم أي حقل (اكتب في خانة الاسم واحفظ). حقل "الاسم بالكامل" لوحده مش في الجدول ده لأنه أساسي
+              للنظام وهيفضل ظاهر وإجباري دايمًا — بس تقدر تغيّر اسمه من الخانة تحت. أي قسم مفيهوش ولا حقل شغال (لا من
+              دول ولا من الحقول المخصصة تحت) بيختفي من الاستمارة تلقائيًا — مش هيظهر كصفحة فاضية.</p>
+            <div class="settings-field">
+              <label for="cfgNameLabel">اسم حقل "الاسم بالكامل" (سيب فاضي = النص الافتراضي)</label>
+              <input type="text" id="cfgNameLabel" placeholder="مثال: الاسم بالكامل">
+            </div>
             <div id="fieldConfigSections"><!-- section groups injected by renderFieldConfigTable() --></div>
+
+            <h4 style="margin:20px 0 6px; font-size:14px; color:#e8f0e8;">🎟️ عروض المجموعات (اختياري)</h4>
+            <p class="hint">لو بتعمل عروض جماعة (زي "عرض الصحاب" أو "عرض الستة"), عرّفهم هنا. أي عرض بحجم أكبر من
+              فرد واحد هيخلّي الاستمارة تطلب اسم وإيميل كل صاحب إضافي في نفس التسجيل — كل واحد فيهم هياخد رقم عضوية
+              وQR وإيميل تأكيد لوحده، وكلهم بيتربطوا تلقائي بكود مجموعة واحد عشان تأكد دفعهم كلهم بزرار واحد بعدين.</p>
+            <div class="mini-table-scroll">
+              <table class="field-config-table" id="groupTiersTable" style="display:none;">
+                <thead><tr><th>اسم العرض</th><th>عدد الأفراد (شامل اللي بيسجّل)</th><th></th></tr></thead>
+                <tbody id="groupTiersBody"></tbody>
+              </table>
+            </div>
+            <div class="settings-field" style="margin-top:8px;">
+              <label for="newGroupTierLabel">اسم عرض جديد</label>
+              <input type="text" id="newGroupTierLabel" placeholder="مثال: عرض الصحاب (٣ أفراد) - ٢٥٠ جنيه">
+              <label for="newGroupTierSize" style="margin-top:6px;">عدد الأفراد (شامل اللي بيسجّل بنفسه)</label>
+              <input type="number" id="newGroupTierSize" min="1" max="20" value="2" style="max-width:100px;">
+            </div>
+            <button type="button" class="settings-btn muted" id="addGroupTierBtn" style="margin-top:6px;">➕ إضافة عرض</button>
 
             <h4 style="margin:20px 0 6px; font-size:14px; color:#e8f0e8;">➕ حقول مخصصة (بالاسم اللي انت عايزه)</h4>
             <p class="hint">مش لاقي الحقل اللي محتاجه في القوائم فوق؟ ضيفه بنفسك هنا — أي اسم وأي نوع، وهيظهر في
@@ -1925,6 +1992,22 @@
       let url = `${SCRIPT_URL}?action=list&password=${encodeURIComponent(password)}${formQS()}`;
       if (sheetName) url += `&sheet=${encodeURIComponent(sheetName)}`;
       url += `&_=${Date.now()}`;
+
+      // Custom-field LABELS (for the row-detail modal + a couple of charts)
+      // via the same public, permission-free endpoint the registration form
+      // itself uses — this way every account, including a plain viewer with
+      // no manageSettings/manageFields, sees readable labels immediately,
+      // without waiting for the Settings tab to ever be opened this session.
+      fetch(`${SCRIPT_URL}?action=publicConfig${formQS()}&_=${Date.now()}`, { cache: "no-store" })
+        .then(r => r.json())
+        .then(res => {
+          if (res.status === "success") {
+            latestCustomFields = res.customFields || [];
+            latestFieldSections = res.fieldSections || {};
+          }
+        })
+        .catch(() => { /* labels just fall back to raw keys — never blocks the real data load above */ });
+
       return fetch(url, { cache: "no-store" })
         .then(r => r.json())
         .then(res => {
@@ -1987,6 +2070,11 @@
         const card = anchorEl ? anchorEl.closest(".settings-card") : null;
         if (card) card.style.display = currentPermissions[permission] ? "" : "none";
       });
+
+      // Not a settings-card, but still sends bulk emails — same permission
+      // the single/group payment-confirm buttons already require.
+      const remindersBtn = document.getElementById("sendPaymentRemindersBtn");
+      if (remindersBtn) remindersBtn.style.display = currentPermissions.manageCertificates ? "" : "none";
     }
 
     function renderSkeleton() {
@@ -2162,6 +2250,20 @@
     }
 
     const COL = {}; // resolved indices, computed after each fetch
+
+    // Custom fields (admin-added, e.g. from "🧩 حقول الاستمارة") don't get
+    // their own sheet column — every registrant's answers to all of them
+    // live together as one JSON blob in the "Custom Fields (JSON)" column
+    // (see CUSTOM_FIELDS_HEADER in Code.gs). This pulls out one field's
+    // answer for one row by its key (e.g. "c_isvolunteer").
+    function getCustomFieldAnswer_(row, key) {
+      if (COL.customFieldsJson < 0) return "";
+      try {
+        const obj = JSON.parse(row[COL.customFieldsJson] || "{}");
+        return obj && obj[key] ? String(obj[key]) : "";
+      } catch (e) { return ""; }
+    }
+
     function resolveColumns() {
       COL.role = findColIndex(["Role in Entity", "الصفة"]);
       COL.faculty = findColIndex(["Faculty", "الكلية"]);
@@ -2174,6 +2276,14 @@
       COL.phone = findColIndex(["Phone", "الهاتف"]);
       COL.whatsapp = findColIndex(["Whatsapp", "واتساب", "الواتساب"]);
       COL.timestamp = findColIndex(["Timestamp", "Date", "التاريخ", "الوقت"]);
+      // The one JSON blob column holding every admin-added custom field's
+      // answers (see CUSTOM_FIELDS_HEADER in Code.gs) — read per-row via
+      // getCustomFieldAnswer_() below, not a plain column value.
+      COL.customFieldsJson = findColIndex(["Custom Fields (JSON)"]);
+      COL.membershipNo = findColIndex(["Membership No", "رقم العضوية"]);
+      COL.receiptUrl = findColIndex(["Receipt URL"]);
+      COL.paymentStatus = findColIndex(["Payment Status"]);
+      COL.groupOffer = findColIndex(["Group Offer"]);
     }
 
     // Phone/whatsapp numbers that show up on more than one row — computed
@@ -2327,6 +2437,16 @@
       if (COL.hasJob > -1) cards.push({ num: total ? Math.round(workingCount / total * 100) + "%" : "0%", label: "بيشتغلوا حاليًا" });
       if (COL.graduate > -1) cards.push({ num: total ? Math.round(graduateCount / total * 100) + "%" : "0%", label: "نسبة الخريجين" });
       if (COL.gender > -1) cards.push({ num: total ? Math.round(femaleCount / total * 100) + "%" : "0%", label: "نسبة الإناث" });
+      // "هل انت متطوع معانا بالفعل؟" custom field (key c_isvolunteer) —
+      // straight count of "new member" answers (whatever that option is
+      // CURRENTLY labeled as — see the volunteer-status chart below for why
+      // this reads the live label instead of a hardcoded string).
+      if (COL.customFieldsJson > -1) {
+        const volunteerField = (latestCustomFields || []).find(f => f.key === "c_isvolunteer");
+        const newLabel = (volunteerField && Array.isArray(volunteerField.options) && volunteerField.options[1]) || "عضو جديد";
+        const newMembersCount = allRows.filter(r => getCustomFieldAnswer_(r, "c_isvolunteer") === newLabel).length;
+        cards.push({ num: newMembersCount, label: "أعضاء جداد انضموا" });
+      }
       // Duplicate-phone detector — flags possible double registrations (same
       // person submitting twice with a different National ID, or a typo'd
       // ID). Purely informational: doesn't touch the sheet or block anything.
@@ -2444,6 +2564,33 @@
       content.innerHTML = allHeaders.map((h, i) => {
         const val = String(row[i] ?? "") || "—";
         const canCopy = i === COL.phone || i === COL.nid || i === COL.email;
+        if (i === COL.receiptUrl && val !== "—") {
+          return `<div class="modal-row"><span class="k">${escapeHtml(h)}</span><span class="v">
+            <a href="${escapeHtml(val)}" target="_blank" rel="noopener">
+              <img src="${escapeHtml(val)}" alt="إيصال الدفع" style="max-width:160px; max-height:200px; border-radius:8px; border:1px solid #33475b; display:block; margin-top:4px;">
+            </a></span></div>`;
+        }
+        // The "Custom Fields (JSON)" column holds every admin-added custom
+        // field's answer as one JSON blob (see CUSTOM_FIELDS_HEADER in
+        // Code.gs) — showing that raw blob as a single row isn't readable at
+        // a glance (e.g. checking which group/offer someone picked and who
+        // their group-mates are), so this expands it into one normal-looking
+        // row per custom field, using each field's CURRENT label from
+        // latestCustomFields (falls back to its stored key if that field was
+        // since deleted, so old answers are never just silently dropped).
+        if (i === COL.customFieldsJson) {
+          let obj = {};
+          try { obj = JSON.parse(row[i] || "{}"); } catch (e) { obj = {}; }
+          const keys = Object.keys(obj).filter(k => String(obj[k] || "").trim() !== "");
+          if (!keys.length) return `<div class="modal-row"><span class="k">${escapeHtml(h)}</span><span class="v">—</span></div>`;
+          const labelFor = (key) => {
+            const cf = (latestCustomFields || []).find(f => f.key === key);
+            return cf ? cf.label : key;
+          };
+          return keys.map(key =>
+            `<div class="modal-row"><span class="k">${escapeHtml(labelFor(key))}</span><span class="v">${escapeHtml(String(obj[key]))}</span></div>`
+          ).join("");
+        }
         return `<div class="modal-row"><span class="k">${escapeHtml(h)}</span><span class="v">${escapeHtml(val)}${canCopy && val !== "—" ? `<button class="modal-copy" data-copy="${escapeHtml(val)}">نسخ</button>` : ""}</span></div>`;
       }).join("");
       content.querySelectorAll(".modal-copy").forEach(btn => {
@@ -2479,6 +2626,73 @@
             });
         });
         content.appendChild(sendBtn);
+      }
+
+      if (currentPermissions.manageCertificates && COL.paymentStatus > -1) {
+        const membershipNo = String(row[COL.membershipNo] ?? "").trim();
+        let isConfirmed = String(row[COL.paymentStatus] ?? "").trim() === "تم التأكيد ✓";
+        const payBtn = document.createElement("button");
+        payBtn.type = "button";
+        payBtn.className = "modal-close";
+        payBtn.style.marginTop = "10px";
+        const labelFor = (confirmed) => confirmed ? "↩️ إلغاء تأكيد الدفع" : "✅ تأكيد الدفع";
+        payBtn.textContent = labelFor(isConfirmed);
+        payBtn.disabled = !membershipNo;
+        if (!membershipNo) payBtn.title = "السجل ده مفهوش رقم عضوية";
+        payBtn.addEventListener("click", () => {
+          const wantConfirmed = !isConfirmed;
+          payBtn.disabled = true;
+          payBtn.textContent = "جاري الحفظ...";
+          postAdmin({ action: "confirmPayment", membershipNo, confirmed: wantConfirmed, sheet: currentSheetName || activeSheetNameFromServer })
+            .then(res => {
+              if (res.status !== "success") throw new Error(res.message || "error");
+              isConfirmed = res.paymentStatus === "تم التأكيد ✓";
+              row[COL.paymentStatus] = res.paymentStatus;
+              toast(isConfirmed ? (res.emailSent ? "اتأكد الدفع ✓ وبعتنا إيميل تأكيد" : "اتأكد الدفع ✓ (من غير إيميل — تأكد الإيميل موجود)") : "اتلغى التأكيد");
+              payBtn.textContent = labelFor(isConfirmed);
+              payBtn.disabled = false;
+            })
+            .catch(err => {
+              toast("فشل الحفظ: " + err.message);
+              payBtn.textContent = labelFor(isConfirmed);
+              payBtn.disabled = false;
+            });
+        });
+        content.appendChild(payBtn);
+      }
+
+      // Group-offer payment confirmation ("عرض الصحاب"/"عرض الستة"...) —
+      // only shown when this specific registrant actually typed a group
+      // code (see the "c_groupcode" seed in getCustomFields_/Code.gs).
+      // Confirms EVERY registrant sharing that exact code in one click,
+      // instead of hunting each one down individually in the table.
+      const groupCode = COL.customFieldsJson > -1 ? getCustomFieldAnswer_(row, "c_groupcode") : "";
+      if (currentPermissions.manageCertificates && COL.paymentStatus > -1 && groupCode) {
+        const groupBtn = document.createElement("button");
+        groupBtn.type = "button";
+        groupBtn.className = "modal-close";
+        groupBtn.style.marginTop = "10px";
+        const groupLabelDefault = `✅ تأكيد دفع المجموعة كلها (كود: ${groupCode})`;
+        groupBtn.textContent = groupLabelDefault;
+        groupBtn.title = "بيأكد الدفع لكل الأعضاء اللي كاتبين نفس الكود ده، مش بس العضو ده";
+        groupBtn.addEventListener("click", () => {
+          groupBtn.disabled = true;
+          groupBtn.textContent = "جاري الحفظ...";
+          postAdmin({ action: "confirmGroupPayment", groupCode, confirmed: true, sheet: currentSheetName || activeSheetNameFromServer })
+            .then(res => {
+              if (res.status !== "success") throw new Error(res.message || "error");
+              toast(`اتأكد الدفع لـ ${res.matched} عضو في المجموعة دي ✓ (${res.emailsSent} إيميل اتبعت)`);
+              groupBtn.textContent = groupLabelDefault;
+              groupBtn.disabled = false;
+              fetchData(currentPassword, currentSheetName).then(() => { populateFilters(); renderAll(); }); // refresh so every affected row's status shows up-to-date
+            })
+            .catch(err => {
+              toast("فشل الحفظ: " + err.message);
+              groupBtn.textContent = groupLabelDefault;
+              groupBtn.disabled = false;
+            });
+        });
+        content.appendChild(groupBtn);
       }
 
       rowModalOverlay.classList.add("show");
@@ -2570,12 +2784,19 @@
           if (res.status !== "success") throw new Error(res.message || "error");
           const cfg = res.config;
           document.getElementById("cfgFormTitle").value = cfg.formTitle || "";
+          document.getElementById("cfgTrustNote").value = cfg.trustNote || "";
+          document.getElementById("cfgFormSubtitle").value = cfg.formSubtitle || "";
+          document.getElementById("cfgI18nOverrides").value = (cfg.i18nOverrides && Object.keys(cfg.i18nOverrides).length) ? JSON.stringify(cfg.i18nOverrides, null, 2) : "";
           document.getElementById("cfgSheetBaseName").value = cfg.sheetBaseName || "";
           document.getElementById("cfgMembershipPrefix").value = cfg.membershipPrefix || "";
           document.getElementById("cfgStartAt").value = isoToLocalInputValue(cfg.startAt);
           document.getElementById("cfgEndAt").value = isoToLocalInputValue(cfg.endAt);
           document.getElementById("cfgConfirmEmailSubject").value = cfg.confirmEmailSubject || "";
           document.getElementById("cfgConfirmEmailBody").value = cfg.confirmEmailBody || "";
+          document.getElementById("cfgPaymentConfirmedEmailSubject").value = cfg.paymentConfirmedEmailSubject || "";
+          document.getElementById("cfgPaymentConfirmedEmailBody").value = cfg.paymentConfirmedEmailBody || "";
+          document.getElementById("cfgPaymentReminderEmailSubject").value = cfg.paymentReminderEmailSubject || "";
+          document.getElementById("cfgPaymentReminderEmailBody").value = cfg.paymentReminderEmailBody || "";
           const preview = document.getElementById("logoPreview");
           preview.src = cfg.logoUrl || "icon.svg";
 
@@ -2584,7 +2805,9 @@
             ? `التيمبلت الحالي: ${cfg.certTemplateName || "(بدون اسم)"} ✓`
             : "لسه مفيش تيمبلت شهادة متحمل.", cfg.certTemplateReady ? "ok" : "");
 
+          document.getElementById("cfgNameLabel").value = (cfg.fieldLabels && cfg.fieldLabels.name) || "";
           renderFieldConfigTable(cfg.fieldConfig || {}, cfg.fieldDefs || {}, cfg.fieldSections || {});
+          renderGroupTiersTable(cfg.groupTiers || []);
           renderCustomFieldsTable(cfg.customFields || []);
           renderSuccessActionsTable(cfg.successActions || []);
         })
@@ -2714,6 +2937,7 @@
     // the form itself, e.g. radio pills, so they're not driven by fieldDefs
     // the way the newer "extra" fields are).
     const BUILTIN_FIELD_LABELS = {
+      nationalId: { section: "personal", label: "الرقم القومي" },
       age: { section: "personal", label: "العمر" },
       gender: { section: "personal", label: "النوع" },
       phone: { section: "contact", label: "رقم الهاتف" },
@@ -2742,16 +2966,18 @@
           .sort((a, b) => (fieldConfig[a] ? fieldConfig[a].order : 0) - (fieldConfig[b] ? fieldConfig[b].order : 0));
         if (!keysInSection.length) return "";
         const rows = keysInSection.map(key => {
-          const conf = fieldConfig[key] || { enabled: true, required: false };
+          const conf = fieldConfig[key] || { enabled: true, required: false, label: "" };
           return `<tr data-field="${key}" draggable="true" class="draggable-row">
             <td class="drag-handle" title="اسحب لإعادة الترتيب">⠿</td>
-            <td>${allFields[key].label}</td>
+            <td><input type="text" class="fld-label" value="${escapeHtml(conf.label || allFields[key].label)}" style="width:100%; box-sizing:border-box;"></td>
             <td><input type="checkbox" class="fld-enabled" ${conf.enabled ? "checked" : ""}></td>
             <td><input type="checkbox" class="fld-required" ${conf.required ? "checked" : ""} ${conf.enabled ? "" : "disabled"}></td>
           </tr>`;
         }).join("");
         return `<div style="margin-top:14px;">
-          <h4 style="margin:0 0 6px; font-size:13px; color:#9fd8ab;">${fieldSections[sectionKey] || sectionKey}</h4>
+          <input type="text" class="section-label-input" data-section="${sectionKey}" value="${escapeHtml(fieldSections[sectionKey] || sectionKey)}"
+            style="margin:0 0 6px; font-size:13px; color:#9fd8ab; background:transparent; border:1px solid transparent; border-radius:6px; padding:2px 6px; font-weight:600;"
+            onfocus="this.style.borderColor='#2c3e50'" onblur="this.style.borderColor='transparent'">
           <div class="mini-table-scroll">
             <table class="field-config-table">
               <thead><tr><th></th><th>الحقل</th><th>ظاهر</th><th>إجباري</th></tr></thead>
@@ -2802,10 +3028,12 @@
       const fields = {};
       let order = 0;
       document.querySelectorAll("#fieldConfigSections tr[data-field]").forEach(tr => {
+        const labelInput = tr.querySelector(".fld-label");
         fields[tr.dataset.field] = {
           enabled: tr.querySelector(".fld-enabled").checked,
           required: tr.querySelector(".fld-required").checked,
           order: order++,
+          label: labelInput ? labelInput.value.trim() : "",
         };
       });
       return fields;
@@ -2824,10 +3052,56 @@
       telegram: { placeholder: "لينك التليجرام (t.me/...)", hint: "الصق لينك القروب/القناة على تليجرام." },
       facebook: { placeholder: "لينك صفحة/جروب الفيسبوك", hint: "الصق لينك الصفحة أو الجروب على فيسبوك." },
       instagram: { placeholder: "لينك حساب الإنستجرام", hint: "الصق لينك البروفايل على إنستجرام." },
+      email: { placeholder: "الإيميل بس (من غير mailto:)، مثلاً info@dyssanad.org", hint: "اكتب عنوان الإيميل بس — لما العضو يدوس الزرار هيتفتحله برنامج الإيميل بتاعه موجّه عليك تلقائي." },
+      wallet_copy: { placeholder: "رقم المحفظة (مثلاً 01012345678)", hint: `اكتب اسم المحفظة في خانة "النص" فوق (مثلاً "فودافون كاش" أو "إنستاباي") ورقمها هنا — لما العضو يدوس الزرار، الرقم بينسخله تلقائي عشان يفتح تطبيق المحفظة بنفسه ويلزقه. محدش من شركات المحافظ دي بيوفر رابط رسمي بيفتح التطبيق مباشرة على شاشة تحويل، فده أضمن حل شغال 100%.` },
       link: { placeholder: "أي لينك (https://...)", hint: "أي لينك تاني عايز تظهره كزرار — درايف، فورم، موقع، إلخ." },
+      text: { placeholder: "(مش محتاج تكتب حاجة هنا — سيبها فاضية)", hint: `اكتب الجملة اللي عايز تظهرها في خانة "النص" فوق (مثلاً: "شكرًا لتسجيلك، هيتم التواصل معاك خلال 3 أيام عمل") — دي هتظهر كنص عادي تحت الأزرار، من غير أي رابط أو زرار.` },
     };
 
     const CUSTOM_TYPE_LABELS = { text: "نص قصير", textarea: "نص طويل", number: "رقم", date: "تاريخ", select: "قائمة اختيار", checkbox: "نعم / لا" };
+
+    let latestGroupTiers = [];
+    function renderGroupTiersTable(tiers) {
+      latestGroupTiers = tiers;
+      const table = document.getElementById("groupTiersTable");
+      const body = document.getElementById("groupTiersBody");
+      if (!tiers.length) { table.style.display = "none"; body.innerHTML = ""; return; }
+      table.style.display = "";
+      body.innerHTML = tiers.map(t => `
+        <tr data-id="${t.id}">
+          <td><input type="text" class="gt-label" value="${escapeHtml(t.label)}" style="width:100%; box-sizing:border-box;"></td>
+          <td><input type="number" class="gt-size" min="1" max="20" value="${t.size}" style="max-width:80px;"></td>
+          <td><button type="button" class="settings-btn muted remove-group-tier-btn" style="padding:2px 10px; font-size:12px;">حذف</button></td>
+        </tr>`).join("");
+
+      body.querySelectorAll(".remove-group-tier-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const id = btn.closest("tr").dataset.id;
+          latestGroupTiers = latestGroupTiers.filter(t => t.id !== id);
+          renderGroupTiersTable(latestGroupTiers);
+        });
+      });
+    }
+
+    function collectGroupTiers_() {
+      return Array.from(document.querySelectorAll("#groupTiersBody tr")).map(tr => ({
+        id: tr.dataset.id,
+        label: tr.querySelector(".gt-label").value.trim(),
+        size: Number(tr.querySelector(".gt-size").value) || 1,
+      })).filter(t => t.label);
+    }
+
+    document.getElementById("addGroupTierBtn").addEventListener("click", () => {
+      const labelInput = document.getElementById("newGroupTierLabel");
+      const sizeInput = document.getElementById("newGroupTierSize");
+      const label = labelInput.value.trim();
+      const size = Math.max(1, Math.min(20, Number(sizeInput.value) || 1));
+      if (!label) { toast("اكتب اسم العرض الأول"); return; }
+      latestGroupTiers.push({ id: "_tmp_" + Date.now() + "_" + Math.random().toString(36).slice(2), label, size });
+      renderGroupTiersTable(latestGroupTiers);
+      labelInput.value = "";
+      sizeInput.value = "2";
+    });
 
     function renderCustomFieldsTable(customFields) {
       latestCustomFields = customFields;
@@ -2867,7 +3141,11 @@
         return `
         <tr data-key="${cf.key}" draggable="true" class="draggable-row">
           <td class="drag-handle" title="اسحب لإعادة الترتيب">⠿</td>
-          <td>${cf.label} <span class="hint">(${CUSTOM_TYPE_LABELS[cf.type] || cf.type})</span></td>
+          <td>
+            <input type="text" class="cf-label" value="${escapeHtml(cf.label)}" style="width:100%; box-sizing:border-box;">
+            <span class="hint">(${CUSTOM_TYPE_LABELS[cf.type] || cf.type})</span>
+            ${cf.type === "select" ? `<input type="text" class="cf-options" placeholder="الخيارات، مفصولة بفاصلة" value="${escapeHtml((cf.options || []).join(", "))}" style="width:100%; box-sizing:border-box; margin-top:4px;">` : ""}
+          </td>
           <td><code style="font-size:11px; opacity:.8;">${cf.key.startsWith("_tmp_") ? "(هيتحدد بعد الحفظ)" : "{{" + cf.key + "}}"}</code></td>
           <td><input type="checkbox" class="cf-enabled" ${cf.enabled ? "checked" : ""}></td>
           <td><input type="checkbox" class="cf-required" ${cf.required ? "checked" : ""}></td>
@@ -2934,12 +3212,17 @@
         if (!cf) return null;
         const conditionRow = document.querySelector(`.cf-condition-row[data-key-for="${tr.dataset.key}"]`);
         const dependsOnKey = conditionRow ? conditionRow.querySelector(".cf-depends-key").value : "";
-        return Object.assign({}, cf, {
+        const labelInput = tr.querySelector(".cf-label");
+        const optionsInput = tr.querySelector(".cf-options");
+        const updated = Object.assign({}, cf, {
+          label: labelInput ? labelInput.value.trim() || cf.label : cf.label,
           enabled: tr.querySelector(".cf-enabled").checked,
           required: tr.querySelector(".cf-required").checked,
           dependsOnKey,
           dependsOnValue: dependsOnKey && conditionRow ? conditionRow.querySelector(".cf-depends-value").value : "",
         });
+        if (optionsInput) updated.options = optionsInput.value.split(",").map(s => s.trim()).filter(Boolean);
+        return updated;
       }).filter(Boolean);
     }
 
@@ -2961,13 +3244,31 @@
       setNote("fieldConfigNote", `حقل "${label}" اتضاف — دوس "حفظ إعدادات الحقول" تحت عشان يتأكد ويظهر ليه كود.`, "ok");
     });
 
+    // Reads the (optional) renamed section headings the admin typed into the
+    // "🧩 حقول الاستمارة" card — e.g. renaming "حقول مخصصة" to whatever they
+    // actually call it. Untouched fields still show their default text (see
+    // renderFieldConfigTable) but only get sent/saved if changed... actually
+    // this sends whatever's currently shown either way, which is fine: the
+    // backend only stores an override for a key if its value differs from
+    // blank, and re-saving the same default text back is harmless.
+    function collectSectionLabels_() {
+      const labels = {};
+      document.querySelectorAll(".section-label-input").forEach(inp => {
+        labels[inp.dataset.section] = inp.value.trim();
+      });
+      return labels;
+    }
+
     document.getElementById("saveFieldConfigBtn").addEventListener("click", () => {
       const btn = document.getElementById("saveFieldConfigBtn");
       const fields = collectFieldConfig_();
       const customFields = collectCustomFields_();
+      const sectionLabels = collectSectionLabels_();
+      const groupTiers = collectGroupTiers_();
+      const nameLabel = document.getElementById("cfgNameLabel").value.trim();
       btn.disabled = true;
       setNote("fieldConfigNote", "جاري الحفظ...");
-      postAdmin({ action: "saveFieldConfig", fields, customFields })
+      postAdmin({ action: "saveFieldConfig", fields, customFields, sectionLabels, groupTiers, nameLabel })
         .then(res => {
           if (res.status !== "success") throw new Error(res.message || "error");
           setNote("fieldConfigNote", "اتحفظت إعدادات الحقول ✓ — سرت مباشرة على استمارة التسجيل", "ok");
@@ -3222,12 +3523,19 @@
       return {
         action: "saveConfig",
         formTitle: document.getElementById("cfgFormTitle").value.trim(),
+        trustNote: document.getElementById("cfgTrustNote").value.trim(),
+        formSubtitle: document.getElementById("cfgFormSubtitle").value.trim(),
+        i18nOverrides: document.getElementById("cfgI18nOverrides").value.trim() || "{}",
         sheetBaseName: document.getElementById("cfgSheetBaseName").value.trim(),
         membershipPrefix: document.getElementById("cfgMembershipPrefix").value.trim(),
         startAt: startVal ? new Date(startVal).toISOString() : "",
         endAt: endVal ? new Date(endVal).toISOString() : "",
         confirmEmailSubject: document.getElementById("cfgConfirmEmailSubject").value.trim(),
         confirmEmailBody: document.getElementById("cfgConfirmEmailBody").value.trim(),
+        paymentConfirmedEmailSubject: document.getElementById("cfgPaymentConfirmedEmailSubject").value.trim(),
+        paymentConfirmedEmailBody: document.getElementById("cfgPaymentConfirmedEmailBody").value.trim(),
+        paymentReminderEmailSubject: document.getElementById("cfgPaymentReminderEmailSubject").value.trim(),
+        paymentReminderEmailBody: document.getElementById("cfgPaymentReminderEmailBody").value.trim(),
         sendCertAuto: document.getElementById("cfgSendCertAuto").checked,
         // Always sent (even from the other save buttons on this tab) so this
         // list never gets silently overwritten by an unrelated save — it just
@@ -3238,6 +3546,13 @@
 
     document.getElementById("saveConfigBtn").addEventListener("click", () => {
       const btn = document.getElementById("saveConfigBtn");
+      const i18nRaw = document.getElementById("cfgI18nOverrides").value.trim() || "{}";
+      try {
+        JSON.parse(i18nRaw);
+      } catch (e) {
+        setNote("configNote", "خانة \"نصوص متقدمة\" فيها JSON مش مكتوب صح — راجعها الأول (لازم تبدأ بـ { وتنتهي بـ })", "err");
+        return;
+      }
       btn.disabled = true;
       setNote("configNote", "جاري الحفظ...");
       postAdmin(Object.assign(collectConfigPayload(), { startNewCycle: false }))
@@ -3549,6 +3864,54 @@
           options: { indexAxis: "y", responsive: true, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: colors.grid } }, y: { grid: { display: false } } } }
         });
       }
+
+      // Volunteer status pie — "هل انت متطوع معانا بالفعل؟" custom field
+      // (key "c_isvolunteer", seeded automatically — see getCustomFields_ in
+      // Code.gs). Reads the CURRENT option labels from latestCustomFields
+      // instead of hardcoding them, since the admin can now rename them
+      // freely from the "حقول مخصصة" table above — a submission stores
+      // whichever exact text was shown at the time, so if the options ever
+      // get renamed, older answers under the old wording will land in the
+      // "لسه ما جاوبش" slice below rather than silently miscounting.
+      if (COL.customFieldsJson > -1) {
+        const volunteerField = (latestCustomFields || []).find(f => f.key === "c_isvolunteer");
+        const opts = (volunteerField && Array.isArray(volunteerField.options) && volunteerField.options.length >= 2)
+          ? volunteerField.options : ["متطوع بالفعل", "عضو جديد"];
+        let existing = 0, brandNew = 0, unanswered = 0;
+        allRows.forEach(r => {
+          const v = getCustomFieldAnswer_(r, "c_isvolunteer");
+          if (v === opts[0]) existing++;
+          else if (v === opts[1]) brandNew++;
+          else unanswered++;
+        });
+        const labels = [opts[0], opts[1]];
+        const data = [existing, brandNew];
+        const bg = [colors.palette[6], colors.palette[7]];
+        if (unanswered > 0) { labels.push("لسه ما جاوبش"); data.push(unanswered); bg.push(colors.palette[5]); }
+        charts.volunteerStatus = new Chart(document.getElementById("chartVolunteerStatus"), {
+          type: "doughnut",
+          data: { labels, datasets: [{ data, backgroundColor: bg }] },
+          options: { responsive: true, plugins: { legend: { position: "bottom" } } }
+        });
+      }
+
+      // Group offers bar — counts every non-blank "Group Offer" value (see
+      // handleSubmit_/buildRow_ in Code.gs, which stamps the chosen tier's
+      // LABEL onto every row in that group). Plain registrants with no
+      // group offer just have "" here and are excluded rather than shown as
+      // a giant "no offer" slice that would dwarf the actual breakdown.
+      if (COL.groupOffer > -1) {
+        const counter = {};
+        allRows.forEach(r => { const v = String(r[COL.groupOffer] || "").trim(); if (v) counter[v] = (counter[v] || 0) + 1; });
+        const entries = Object.entries(counter).sort((a, b) => b[1] - a[1]);
+        if (entries.length) {
+          charts.groupOffers = new Chart(document.getElementById("chartGroupOffers"), {
+            type: "bar",
+            data: { labels: entries.map(e => e[0]), datasets: [{ label: "عدد", data: entries.map(e => e[1]), backgroundColor: colors.palette[3] }] },
+            options: { indexAxis: "y", responsive: true, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: colors.grid } }, y: { grid: { display: false } } } }
+          });
+        }
+      }
     }
 
     // ==================== Export & Print ====================
@@ -3665,7 +4028,23 @@
         .finally(() => { btn.disabled = false; btn.textContent = originalText; });
     });
 
-    // ==================== AI chat assistant ====================
+    document.getElementById("sendPaymentRemindersBtn").addEventListener("click", () => {
+      const targetSheet = currentSheetName || activeSheetNameFromServer;
+      if (!targetSheet) { toast("اختار شيت الأول"); return; }
+      const ok = confirm(`هيتبعت إيميل تذكير لكل عضو معاه إيميل ودفعه لسه مش مؤكد جوه "${targetSheet}". العملية ممكن تاخد وقت لو العدد كبير. متابعة؟`);
+      if (!ok) return;
+      const btn = document.getElementById("sendPaymentRemindersBtn");
+      btn.disabled = true;
+      const originalText = btn.textContent;
+      btn.textContent = "جاري الإرسال...";
+      postAdmin({ action: "sendPaymentReminders", sheet: targetSheet })
+        .then(res => {
+          if (res.status !== "success") throw new Error(res.message || "error");
+          toast(`اتبعت ${res.sent} تذكير ✓ (فشل: ${res.failed} | من غير إيميل: ${res.skippedNoEmail} | كانوا مدفوعين خلاص: ${res.skippedAlreadyPaid})`);
+        })
+        .catch(err => toast("حصل خطأ: " + err.message))
+        .finally(() => { btn.disabled = false; btn.textContent = originalText; });
+    });
     const AI_QUICK_QUESTIONS_DASH = [
       "كام واحد سجل لحد دلوقتي؟",
       "إزاي أضيف فورم جديد؟",
