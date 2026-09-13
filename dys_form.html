@@ -1005,6 +1005,27 @@
       background: var(--dys-navy);
     }
 
+    .btn-whatsapp.sa-email {
+      background: #4B5A72;
+    }
+
+    .btn-whatsapp.sa-wallet {
+      background: #8e44ad;
+      border: none;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .sa-text {
+      display: block;
+      background: transparent;
+      color: var(--dys-text);
+      font-weight: 600;
+      font-size: 14px;
+      text-align: center;
+      padding: 6px 4px;
+    }
+
     .btn-print {
       background: #eef1ef;
       color: var(--dys-text);
@@ -1347,7 +1368,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M12 2l7 3v6c0 5-3.4 8.4-7 11-3.6-2.6-7-6-7-11V5l7-3z" />
         </svg>
-        <span data-i18n="trustNote">بياناتك بتتبعت مباشرة للجنة ومحدش تاني بيشوفها</span>
+        <span id="trustNoteEl" data-i18n="trustNote">جاهز تكون جزء من الحدث؟ سجّل بياناتك وخلّينا نشوفك هناك</span>
       </div>
       <div class="lang-toggle" role="group" aria-label="Language">
         <button type="button" id="langAr" class="active" data-lang="ar">AR</button>
@@ -1386,9 +1407,13 @@
 
     <div class="card">
 
+      <div id="restoringNotice" style="display:none; padding:70px 20px; text-align:center; color:var(--dys-text-muted); font-weight:600;">
+        بنجيب بياناتك...
+      </div>
+
       <div id="formArea">
         <h1 class="title" id="formTitleEl" data-i18n="pageTitle">استمارة تسجيل البيانات</h1>
-        <p class="subtitle">Delta Youth Sanad &middot; سند شباب الدلتا</p>
+        <p class="subtitle" id="formSubtitleEl">Delta Youth Sanad &middot; سند شباب الدلتا</p>
 
         <div class="stars" id="starsRow">
           <div class="star" data-step="1"><svg viewBox="0 0 24 24">
@@ -1714,7 +1739,7 @@
 
     // Populated from ?action=publicConfig (see loadRegistrationConfig below).
     // Each entry: {id, type, label, value, enabled} — type is one of
-    // "whatsapp_chat" | "whatsapp_group" | "telegram" | "facebook" | "instagram" | "link".
+    // "whatsapp_chat" | "whatsapp_group" | "telegram" | "facebook" | "instagram" | "email" | "wallet_copy" | "text" | "link".
     let DYS_SUCCESS_ACTIONS = null; // null = "not loaded yet / backend unreachable", not "empty on purpose"
 
     // Which form/tenant THIS page instance is — read from this page's own
@@ -1722,11 +1747,16 @@
     // the original default form (see propKey_() in Code.gs) — so the
     // original link with no ?form= at all keeps working exactly as before.
     const DYS_FORM_ID = new URLSearchParams(window.location.search).get("form") || "";
+    // Scoped by form — a device that registered for THIS form should still
+    // see the normal empty form when visiting a DIFFERENT form's link (or
+    // this same script deployed for another event), not get stuck on an
+    // old success screen from something unrelated.
+    const ALREADY_REGISTERED_KEY = "dys_already_registered_v1" + (DYS_FORM_ID ? ("__" + DYS_FORM_ID) : "");
 
     // ==================== i18n ====================
     const I18N = {
       ar: {
-        trustNote: "بياناتك بتتبعت مباشرة للجنة ومحدش تاني بيشوفها",
+        trustNote: "جاهز تكون جزء من الحدث؟ سجّل بياناتك وخلّينا نشوفك هناك",
         pageTitle: "استمارة تسجيل البيانات",
         pctComplete: "مكتمل",
         autosaved: "محفوظ تلقائيًا",
@@ -1755,7 +1785,7 @@
         step1: "البيانات الشخصية", step2: "بيانات التواصل", step3: "البيانات الدراسية", step4: "اللجنة", step5: "بيانات إضافية",
         emptyVal: "—", notEntered: "لم يُدخل",
         submitGeneric: "حصل خطأ أثناء الإرسال. من فضلك حاول تاني.",
-        submitDuplicate: "أنت مسجل بالفعل بنفس الرقم القومي، مفيش داعي تسجل تاني.",
+        submitDuplicate: "أنت مسجل بالفعل، مفيش داعي تسجل تاني.",
         retry: "إعادة المحاولة",
         sending: "جاري الإرسال...",
         emailSentOk: "بعتنالك رسالة تأكيد على إيميلك.",
@@ -1807,7 +1837,7 @@
         step1: "Personal info", step2: "Contact info", step3: "Academic info", step4: "Committee", step5: "Extra info",
         emptyVal: "—", notEntered: "not entered",
         submitGeneric: "Something went wrong while sending. Please try again.",
-        submitDuplicate: "You're already registered with this National ID, no need to register again.",
+        submitDuplicate: "You're already registered, no need to register again.",
         retry: "Retry",
         sending: "Sending...",
         emailSentOk: "We sent you a confirmation email.",
@@ -1933,6 +1963,47 @@
             const titleEl = document.getElementById("formTitleEl");
             if (titleEl) titleEl.textContent = res.formTitle;
           }
+          if (res.trustNote) {
+            const trustEl = document.getElementById("trustNoteEl");
+            if (trustEl) trustEl.textContent = res.trustNote;
+          }
+          if (res.formSubtitle) {
+            const subEl = document.getElementById("formSubtitleEl");
+            if (subEl) subEl.textContent = res.formSubtitle;
+          }
+          // Renamed labels for the built-in fields (age, gender, phone...),
+          // set from "🧩 حقول الاستمارة" in the dashboard. Mutating I18N.ar
+          // directly (rather than just touching the DOM once) means the
+          // override also survives the user toggling AR/EN back to Arabic
+          // later — applyLang() always re-reads from this same dictionary.
+          if (res.fieldLabels) {
+            Object.keys(res.fieldLabels).forEach(key => {
+              const override = res.fieldLabels[key];
+              const i18nKey = FIELD_KEY_TO_I18N[key];
+              if (!override || !i18nKey) return;
+              I18N.ar[i18nKey] = override;
+              if (currentLang === "ar") {
+                document.querySelectorAll(`[data-i18n="${i18nKey}"]`).forEach(el => { el.textContent = override; });
+              }
+            });
+          }
+          // "نصوص متقدمة" — free-form overrides for ANY OTHER i18n key
+          // (error/validation messages, button labels, ...) the admin typed
+          // into Settings, on top of the more specific overrides above.
+          // Same approach: mutate the dictionary (so it's picked up by any
+          // t(key) call made later, e.g. an error message that hasn't
+          // happened yet) AND update any matching element already in the
+          // DOM right now (e.g. "التالي"/"السابق", which render immediately).
+          if (res.i18nOverrides) {
+            Object.keys(res.i18nOverrides).forEach(key => {
+              const override = res.i18nOverrides[key];
+              if (!override) return;
+              I18N.ar[key] = override;
+              if (currentLang === "ar") {
+                document.querySelectorAll(`[data-i18n="${key}"]`).forEach(el => { el.textContent = override; });
+              }
+            });
+          }
           if (res.logoUrl) {
             const img = document.getElementById("customLogoImg");
             img.onload = () => {
@@ -1944,13 +2015,42 @@
           }
           if (regPhase !== "open") showClosedScreen();
           if (res.fieldConfig) applyFieldConfig_(res.fieldConfig);
-          buildDynamicFieldsStep_(res.fieldConfig || {}, res.fieldDefs || {}, res.fieldSections || {}, res.customFields || []);
+          buildDynamicFieldsStep_(res.fieldConfig || {}, res.fieldDefs || {}, res.fieldSections || {}, res.customFields || [], res.groupTiers || []);
           updateVisibleSteps_();
           // Only enabled entries ever come back from publicConfig (server-side
           // filter), so this is already exactly what should render.
           DYS_SUCCESS_ACTIONS = Array.isArray(res.successActions) ? res.successActions : [];
+
+          // Now that branding/success-actions are ready, jump straight to
+          // the success screen if THIS device already registered before —
+          // see the ALREADY_REGISTERED_KEY note in showSuccessScreen().
+          restoreSuccessScreenIfAlreadyRegistered_();
         })
-        .catch(() => { /* backend unreachable — fall back to "always open", exactly like before */ });
+        .catch(() => {
+          // Backend unreachable — for a fresh visitor this already meant
+          // "fall back to always open, exactly like before"; for a
+          // returning device this ALSO restores its success screen (using
+          // the fallback WhatsApp numbers instead of the real
+          // DYS_SUCCESS_ACTIONS, same graceful degradation the rest of this
+          // page already does offline) — otherwise they'd be stuck staring
+          // at "بنجيب بياناتك..." forever with no way forward.
+          restoreSuccessScreenIfAlreadyRegistered_();
+        });
+    }
+
+    // Convenience only, not a real duplicate-registration guard (that's the
+    // server-side National ID/phone/email checks in Code.gs) — a device
+    // that has this form's ALREADY_REGISTERED_KEY in localStorage just gets
+    // taken straight to its own past success screen instead of the empty
+    // form, so revisiting the same link doesn't look like "did my
+    // registration not go through?". Clearing browser data, a different
+    // browser, or incognito all skip this and show the normal form, exactly
+    // as if nothing had ever been registered from that device.
+    function restoreSuccessScreenIfAlreadyRegistered_() {
+      let saved;
+      try { saved = JSON.parse(localStorage.getItem(ALREADY_REGISTERED_KEY) || "null"); } catch (e) { saved = null; }
+      if (!saved || !saved.payload || !saved.res) return;
+      showSuccessScreen(saved.payload, saved.res, true);
     }
 
     // ==================== Egyptian National ID parsing ====================
@@ -2149,10 +2249,22 @@
 
     // ---- Field show/hide + required/optional, driven by the dashboard's
     // "🧩 حقول الاستمارة" settings card (see applyFieldConfig_ call in
-    // loadRegistrationConfig). "name" and "nationalId" are never in here —
-    // they're always shown and required.
-    const TOGGLEABLE_FIELD_KEYS = ["age", "gender", "phone", "whatsapp", "email",
+    // loadRegistrationConfig). "name" is never in here — it's always shown
+    // and required. "nationalId" used to be hardcoded the same way but is
+    // now toggleable like everything else in this list.
+    const TOGGLEABLE_FIELD_KEYS = ["nationalId", "age", "gender", "phone", "whatsapp", "email",
       "faculty", "graduate", "committee", "hasJob"];
+
+    // Maps each of the fields above (plus "name", which is never hidden but
+    // can still have its label renamed) to the i18n dictionary key that
+    // holds its label text — shared by labelFor() below (review screen) and
+    // the field-label overrides applied in loadRegistrationConfig().
+    const FIELD_KEY_TO_I18N = {
+      name: "lblName", age: "lblAge", gender: "lblGender", nationalId: "lblNid",
+      phone: "lblPhone", whatsapp: "lblWhatsapp", email: "lblEmail",
+      faculty: "lblFaculty", graduate: "lblGraduate", committee: "lblCommittee", hasJob: "lblHasJob",
+      currentJob: "lblCurrentJob"
+    };
 
     // Which of the 9 toggleable fields live inside each of the original
     // static steps (2/3/4). Used by updateVisibleSteps_() below to hide a
@@ -2271,6 +2383,11 @@
           <input type="file" accept="image/*" class="photo-file-input">
           <img class="photo-preview" style="display:none; max-width:130px; max-height:130px; border-radius:10px; margin-top:8px; object-fit:cover;">
           <div class="hint" style="margin-top:4px;">هترفع صورة، وهنصغّرها تلقائيًا قبل الإرسال.</div>`;
+      } else if (f.type === "receipt") {
+        inner = `<input type="hidden" name="${f.key}">
+          <input type="file" accept="image/*" class="receipt-file-input">
+          <img class="receipt-preview" style="display:none; max-width:180px; max-height:220px; border-radius:10px; margin-top:8px; object-fit:contain; border:1px solid #33475b;">
+          <div class="hint" style="margin-top:4px;">ارفع سكرين شوت/صورة إيصال التحويل، وهنصغّرها تلقائيًا قبل الإرسال.</div>`;
       } else if (f.type === "video") {
         inner = `<input type="hidden" name="${f.key}">
           <input type="file" accept="video/*" class="video-file-input">
@@ -2322,6 +2439,7 @@
     }
 
     let photoBase64Data_ = "";
+    let receiptBase64Data_ = "";
 
     // Uploads a video file straight from the browser to Cloudinary (an
     // "unsigned" upload — no secret key needed client-side, just the cloud
@@ -2361,7 +2479,7 @@
       });
     }
 
-    function buildDynamicFieldsStep_(fieldConfig, fieldDefs, fieldSections, customFields) {
+    function buildDynamicFieldsStep_(fieldConfig, fieldDefs, fieldSections, customFields, groupTiers) {
       const stepEl = document.getElementById("dynamicFieldsStep");
       const star5 = document.getElementById("star5");
 
@@ -2402,7 +2520,99 @@
         html += `<h3 class="dyn-section-title" style="margin:${sectionKey === DYNAMIC_SECTION_ORDER[0] ? "0" : "22px"} 0 4px; font-size:15px;">${escapeHtml(fieldSections[sectionKey] || "")}</h3>`;
         fields.forEach(f => { html += renderDynamicField_(f); });
       });
+
+      // Group/bundle offer ("سجّلت إزاي؟") — a completely separate mechanism
+      // from the sections above (see getGroupTiers_ in Code.gs): a plain
+      // dropdown of admin-defined tiers, and picking one that needs more
+      // than just the submitter dynamically reveals that many "name +
+      // email" blocks right here. Deliberately NOT wired through the
+      // generic DYNAMIC_FIELD_TYPES/validators machinery above — a variable
+      // number of sub-fields depending on a choice doesn't fit that
+      // single-value-per-key model, so this has its own small, self-
+      // contained collection logic in collectAllData() instead.
+      const hasGroupTiers = Array.isArray(groupTiers) && groupTiers.length > 0;
+      if (hasGroupTiers) {
+        anyField = true;
+        html += `<h3 class="dyn-section-title" style="margin:${html ? "22px" : "0"} 0 4px; font-size:15px;">سجّلت إزاي؟</h3>`;
+        html += `<div class="field">
+          <label>اخترت أي عرض؟</label>
+          <select id="groupTierSelect">
+            <option value="">فردي (بدون عرض جماعة)</option>
+            ${groupTiers.map(t => `<option value="${escapeHtml(t.id)}" data-size="${t.size}">${escapeHtml(t.label)}</option>`).join("")}
+          </select>
+          <div id="groupMembersContainer" style="margin-top:10px;"></div>
+        </div>`;
+      }
+
       stepEl.innerHTML = html;
+
+      if (hasGroupTiers) {
+        // Renders (size - 1) "name + email" blocks for a chosen tier — size
+        // counts the submitter themselves, so a tier of 3 asks for 2 more
+        // people here. Switching back to "فردي" (or another tier) simply
+        // rebuilds the container from scratch; nothing previously typed in
+        // is preserved across a tier change — see hint text below.
+        function renderGroupMemberFields_(size) {
+          const container = document.getElementById("groupMembersContainer");
+          if (!container) return;
+          let blocksHtml = "";
+          for (let i = 1; i < size; i++) {
+            blocksHtml += `<div class="group-member-block" style="margin-top:10px; padding-top:10px; border-top:1px dashed #33475b;">
+              <div class="hint" style="margin-bottom:4px;">بيانات صاحبك رقم ${i}</div>
+              <input type="text" class="group-member-name" placeholder="الاسم">
+              <input type="email" class="group-member-email" placeholder="الإيميل — هيوصله تسجيله وQR بتاعه عليه" style="margin-top:6px;">
+            </div>`;
+          }
+          container.innerHTML = blocksHtml;
+          // Clears the red border the moment a value looks valid again,
+          // instead of leaving it stuck until the next "التالي" click.
+          container.querySelectorAll(".group-member-name").forEach(inp => {
+            inp.addEventListener("input", () => { if (inp.value.trim().length >= 3) inp.style.borderColor = ""; });
+          });
+          container.querySelectorAll(".group-member-email").forEach(inp => {
+            inp.addEventListener("input", () => { if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(inp.value.trim())) inp.style.borderColor = ""; });
+          });
+        }
+        document.getElementById("groupTierSelect").addEventListener("change", (e) => {
+          const opt = e.target.selectedOptions[0];
+          const size = opt ? Number(opt.dataset.size || 1) : 1;
+          renderGroupMemberFields_(size);
+
+          // The manual "كود المجموعة" custom field (if the admin has it
+          // enabled — see the c_groupcode seed in Code.gs) is for a
+          // DIFFERENT scenario: a group whose members each fill out the
+          // form separately and agree on a shared code themselves. Picking
+          // a real bundled tier here means the backend generates and
+          // stamps that code automatically instead (see handleSubmit_), so
+          // showing an editable "كود المجموعة" box at the same time would
+          // just be confusing — whatever the person types there gets
+          // silently overwritten anyway. Hide it (and clear it, so nothing
+          // stale gets sent) whenever a real group tier is active.
+          const groupCodeField = document.querySelector('[data-key="c_groupcode"]');
+          if (groupCodeField) {
+            // Cache the field's ORIGINAL enabled/disabled state (set by
+            // applyFieldConfig_ from the admin's actual settings) the first
+            // time this runs, so switching back to "فردي" restores it
+            // correctly instead of just always forcing it visible —
+            // dataset.disabled (not just style.display) is what
+            // validateField/collectAllData actually check, so both need to
+            // move together or a required c_groupcode would still block
+            // submission even while hidden.
+            if (groupCodeField.dataset.originalDisabled === undefined) {
+              groupCodeField.dataset.originalDisabled = groupCodeField.dataset.disabled || "0";
+            }
+            if (size > 1) {
+              groupCodeField.style.display = "none";
+              groupCodeField.dataset.disabled = "1";
+              const input = groupCodeField.querySelector("input, textarea, select");
+              if (input) input.value = "";
+            } else {
+              groupCodeField.style.display = "";
+              groupCodeField.dataset.disabled = groupCodeField.dataset.originalDisabled;
+            }
+          }
+        });
+      }
 
       const reviewIdx = reviewGroups.findIndex(g => g.step === 5);
       if (!anyField) {
@@ -2427,6 +2637,7 @@
           validators[f.key] = (v) => {
             if (v === "" || v === undefined) return false; // validateStep only calls this when the field isn't optional-empty
             if (f.type === "photo") return v === "1"; // hidden input is set to "1" only once resize+read succeeds
+            if (f.type === "receipt") return v === "1"; // same as photo — see below
             if (f.type === "video") return /^https:\/\//.test(v); // hidden input holds the Cloudinary URL once upload succeeds
             if (f.type === "select" && f.options) return f.options.indexOf(v) > -1;
             if (f.type === "checkbox") return v === "Yes" || v === "No";
@@ -2463,6 +2674,35 @@
                 })
                 .catch(() => {
                   photoBase64Data_ = "";
+                  hiddenInput.value = "";
+                  preview.style.display = "none";
+                  fileInput.value = "";
+                  validateField(f.key);
+                });
+            });
+          } else if (f.type === "receipt") {
+            const fileInput = fieldEl.querySelector(".receipt-file-input");
+            const hiddenInput = fieldEl.querySelector('input[type="hidden"]');
+            const preview = fieldEl.querySelector(".receipt-preview");
+            fileInput.addEventListener("change", () => {
+              const file = fileInput.files[0];
+              if (!file) {
+                receiptBase64Data_ = "";
+                hiddenInput.value = "";
+                preview.style.display = "none";
+                validateField(f.key);
+                return;
+              }
+              resizeImageToBase64_(file)
+                .then(dataUrl => {
+                  receiptBase64Data_ = dataUrl;
+                  hiddenInput.value = "1";
+                  preview.src = dataUrl;
+                  preview.style.display = "block";
+                  validateField(f.key);
+                })
+                .catch(() => {
+                  receiptBase64Data_ = "";
                   hiddenInput.value = "";
                   preview.style.display = "none";
                   fileInput.value = "";
@@ -2659,6 +2899,39 @@
         }
       });
       if (firstInvalid) firstInvalid.scrollIntoView({ behavior: "smooth", block: "center" });
+      // Group-member "name + email" blocks (see buildDynamicFieldsStep_)
+      // live on the same step as the dynamic/custom fields but aren't part
+      // of the generic validators[]/[data-key] loop above — they need their
+      // own check so an incomplete friend entry blocks moving on instead of
+      // silently vanishing at submit time (see validateGroupMembers_).
+      if (step === 5 && !validateGroupMembers_()) valid = false;
+      return valid;
+    }
+
+    // Returns true (nothing to check) if no group tier is selected at all.
+    // Otherwise requires EVERY rendered "name + email" block to have a real
+    // name and a validly shaped email — Code.gs silently skips any
+    // incomplete entry rather than failing the whole submission, so this is
+    // the only place that actually stops a half-filled friend block from
+    // quietly turning into "one fewer person registered than the group
+    // offer promised."
+    function validateGroupMembers_() {
+      const select = document.getElementById("groupTierSelect");
+      if (!select || !select.value) return true;
+      const blocks = document.querySelectorAll("#groupMembersContainer .group-member-block");
+      let valid = true;
+      let firstInvalid = null;
+      blocks.forEach(block => {
+        const nameInput = block.querySelector(".group-member-name");
+        const emailInput = block.querySelector(".group-member-email");
+        const nameOk = nameInput.value.trim().length >= 3;
+        const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput.value.trim());
+        nameInput.style.borderColor = nameOk ? "" : "#c0392b";
+        emailInput.style.borderColor = emailOk ? "" : "#c0392b";
+        if (!nameOk) { valid = false; if (!firstInvalid) firstInvalid = nameInput; }
+        if (!emailOk) { valid = false; if (!firstInvalid) firstInvalid = emailInput; }
+      });
+      if (firstInvalid) firstInvalid.scrollIntoView({ behavior: "smooth", block: "center" });
       return valid;
     }
 
@@ -2688,6 +2961,10 @@
           data.photoBase64 = photoBase64Data_ || "";
           return;
         }
+        if (DYNAMIC_FIELD_TYPES[key] === "receipt") {
+          data.receiptBase64 = receiptBase64Data_ || "";
+          return;
+        }
         if (DYNAMIC_FIELD_TYPES[key] === "video") {
           data.videoUrl = getFieldValue(key).trim(); // already a Cloudinary URL by now, or ""
           return;
@@ -2696,6 +2973,20 @@
         if (DYNAMIC_CUSTOM_KEYS[key]) data.customFields[key] = value;
         else data[key] = value;
       });
+
+      // Group members (name + email, however many the chosen group offer
+      // needs — see buildDynamicFieldsStep_'s "سجّلت إزاي؟" block). Only
+      // sent when a real group tier is selected; Code.gs silently skips any
+      // block missing a name or a validly shaped email rather than failing
+      // the whole submission over one incomplete friend entry.
+      const groupTierSelect = document.getElementById("groupTierSelect");
+      if (groupTierSelect && groupTierSelect.value) {
+        data.groupTierId = groupTierSelect.value;
+        data.groupMembers = Array.from(document.querySelectorAll("#groupMembersContainer .group-member-block")).map(block => ({
+          name: block.querySelector(".group-member-name").value.trim(),
+          email: block.querySelector(".group-member-email").value.trim(),
+        })).filter(m => m.name || m.email);
+      }
 
       return data;
     }
@@ -2709,13 +3000,7 @@
     ];
 
     function labelFor(key) {
-      const map = {
-        name: "lblName", age: "lblAge", gender: "lblGender", nationalId: "lblNid",
-        phone: "lblPhone", whatsapp: "lblWhatsapp", email: "lblEmail",
-        faculty: "lblFaculty", graduate: "lblGraduate", committee: "lblCommittee", hasJob: "lblHasJob",
-        currentJob: "lblCurrentJob"
-      };
-      if (map[key]) return t(map[key]);
+      if (FIELD_KEY_TO_I18N[key]) return t(FIELD_KEY_TO_I18N[key]);
       return DYNAMIC_FIELD_LABELS[key] || key;
     }
 
@@ -2726,6 +3011,7 @@
       if (key === "graduate" || key === "hasJob") return { text: raw === "Yes" ? t("yes") : t("no"), empty: false };
       if (DYNAMIC_FIELD_TYPES[key] === "checkbox") return { text: raw === "Yes" ? t("yes") : t("no"), empty: false };
       if (DYNAMIC_FIELD_TYPES[key] === "photo") return { text: "تم اختيار صورة ✓", empty: false };
+      if (DYNAMIC_FIELD_TYPES[key] === "receipt") return { text: "تم اختيار الإيصال ✓", empty: false };
       if (DYNAMIC_FIELD_TYPES[key] === "video") return { text: "تم رفع الفيديو ✓", empty: false };
       return { text: raw, empty: false };
     }
@@ -2811,7 +3097,52 @@
         : DYS_WHATSAPP_NUMBERS_FALLBACK.map(entry => ({ type: "whatsapp_chat", label: entry.label, value: entry.number, enabled: true }));
 
       actions.forEach(entry => {
-        if (!entry || !entry.value) return;
+        if (!entry) return;
+
+        // "text" = plain sentence, no button/link at all (per the dashboard's
+        // "جملة عادية (نص بس، من غير زرار)" option) — it has no "value", only
+        // a label, so it must be handled before the generic value/href logic
+        // below (which would otherwise silently skip it for having no value).
+        if (entry.type === "text") {
+          if (!entry.label) return;
+          const p = document.createElement("p");
+          p.className = "sa-text";
+          p.textContent = entry.label;
+          waContainer.appendChild(p);
+          return;
+        }
+
+        // "wallet_copy" = copies the wallet's phone number to the clipboard
+        // instead of navigating anywhere — none of Egypt's payment apps
+        // publish an official "open to a pre-filled transfer" link the way
+        // WhatsApp does, so copy-then-paste-in-their-own-app is the reliable
+        // alternative. Handled before the generic <a href> logic below since
+        // this needs a <button>, not a link.
+        if (entry.type === "wallet_copy") {
+          if (!entry.value) return;
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "btn-whatsapp sa-wallet";
+          const defaultText = entry.label ? `📋 نسخ رقم ${entry.label}` : "📋 نسخ الرقم";
+          btn.textContent = defaultText;
+          btn.addEventListener("click", () => {
+            const copyText = () => {
+              btn.textContent = "✅ اتنسخ الرقم!";
+              setTimeout(() => { btn.textContent = defaultText; }, 2000);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(entry.value).then(copyText).catch(() => {
+                btn.textContent = entry.value; // clipboard blocked (old browser/no HTTPS) — show the number instead
+              });
+            } else {
+              btn.textContent = entry.value;
+            }
+          });
+          waContainer.appendChild(btn);
+          return;
+        }
+
+        if (!entry.value) return;
         const a = document.createElement("a");
         a.target = "_blank";
         a.rel = "noopener";
@@ -2837,6 +3168,10 @@
             a.href = entry.value;
             a.className = "btn-whatsapp sa-instagram";
             break;
+          case "email":
+            a.href = `mailto:${entry.value}`;
+            a.className = "btn-whatsapp sa-email";
+            break;
           default: // "link" and anything unrecognized
             a.href = entry.value;
             a.className = "btn-whatsapp sa-link";
@@ -2846,12 +3181,35 @@
     }
 
     // ==================== Submit ====================
-    function showSuccessScreen(payload, res) {
+    function showSuccessScreen(payload, res, isRestore) {
       document.getElementById("formArea").style.display = "none";
+      document.getElementById("restoringNotice").style.display = "none";
       document.getElementById("offlineQueuedArea").classList.remove("visible");
       document.getElementById("successArea").classList.add("visible");
       try { localStorage.removeItem(DRAFT_KEY); } catch (e) { }
-      launchConfetti();
+      if (!isRestore) launchConfetti(); // only on the actual moment of registering — not every time this same screen gets restored on a later visit
+
+      // Remembers "this device already registered" so a later visit to the
+      // same link can jump straight back to this same success screen
+      // instead of showing the form again — see restoreSuccessScreenIfAlreadyRegistered_
+      // near the top of this script. This is a CONVENIENCE for someone
+      // revisiting their own link, not a real duplicate-registration
+      // guard — that's what the server-side National ID/phone/email checks
+      // in Code.gs are for. Clearing browser data, opening the link in a
+      // different browser, or using incognito all bypass this completely,
+      // same as any localStorage-based memory would.
+      //
+      // Only the handful of fields this screen actually reads get saved —
+      // NOT the full payload, which can carry a base64 photo/receipt image
+      // large enough to risk hitting localStorage's storage quota for no
+      // benefit (nothing here ever displays that image again).
+      if (!isRestore) {
+        try {
+          const slimPayload = { name: payload.name, email: payload.email, nationalId: payload.nationalId, committee: payload.committee };
+          const slimRes = { membershipNo: res.membershipNo, emailSent: res.emailSent };
+          localStorage.setItem(ALREADY_REGISTERED_KEY, JSON.stringify({ payload: slimPayload, res: slimRes }));
+        } catch (e) { /* storage full/blocked — the success screen still shows fine just this once */ }
+      }
 
       if (res.membershipNo) {
         document.getElementById("memberNoValue").textContent = res.membershipNo;
@@ -3258,6 +3616,20 @@
     }
 
     // ==================== Init ====================
+    // Synchronous, immediate check — BEFORE anything else runs — so a
+    // returning device sees "بنجيب بياناتك..." instead of a flash of the
+    // empty form while loadRegistrationConfig()'s fetch is still in
+    // flight. The actual success screen only renders once that fetch
+    // resolves (see restoreSuccessScreenIfAlreadyRegistered_), since it
+    // needs the real logo/success-action buttons from the backend — this
+    // is just about what's on screen for that brief moment beforehand.
+    (function hideFormImmediatelyIfAlreadyRegistered_() {
+      let saved;
+      try { saved = localStorage.getItem(ALREADY_REGISTERED_KEY); } catch (e) { saved = null; }
+      if (!saved) return;
+      document.getElementById("formArea").style.display = "none";
+      document.getElementById("restoringNotice").style.display = "block";
+    })();
     applyLang(currentLang);
     loadDraftIfAny();
     computeProgress();
