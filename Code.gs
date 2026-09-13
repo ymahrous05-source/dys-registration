@@ -40,7 +40,7 @@
 // deployments ▸ Edit (✏️) ▸ New version ▸ Deploy (see BACKEND_SETUP_STEPS.md
 // step 7). This single check rules out the #1 cause of "I edited the code
 // but nothing changed."
-const CODE_VERSION = "2026-09-10-full-feature-port-from-osh";
+const CODE_VERSION = "2026-08-25-checkin-scanner";
 
 // ---------------------------------------------------------------------------
 // Google Sign-In (optional — the old shared password keeps working forever
@@ -50,7 +50,7 @@ const CODE_VERSION = "2026-09-10-full-feature-port-from-osh";
 // Services ▸ Credentials — see BACKEND_SETUP_STEPS.md). Leave the
 // placeholder as-is and the "تسجيل دخول بجوجل" button just won't work yet —
 // everything else (password login) is unaffected.
-const GOOGLE_CLIENT_ID = "839154817826-d9dhm6t1osl2oem173t84diprmfcbrvg.apps.googleusercontent.com"; // TODO: paste your own OAuth Client ID here (Google Cloud Console) if you want "Sign in with Google" — see comment above. Password login works fine without it.
+const GOOGLE_CLIENT_ID = "839154817826-d9dhm6t1osl2oem173t84diprmfcbrvg.apps.googleusercontent.com";
 
 // How long a Google-signed-in session stays valid before that person has to
 // sign in again (they'll just see the "Sign in with Google" button reappear
@@ -75,7 +75,7 @@ const SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 //
 // Leave FROM_EMAIL as "" to skip all this and just send from the script
 // owner's own address, exactly like before this feature existed.
-const FROM_EMAIL = "dyssanad@gmail.com"; // TODO: set a verified "send mail as" address for سند شباب الدلتا, or leave "" to send from the script owner's own Google account
+const FROM_EMAIL = "dyssanad@gmail.com";
 const FROM_NAME = "سند شباب الدلتا";
 
 // Central email sender — every outgoing email in this file goes through
@@ -115,28 +115,6 @@ const PERMISSION_KEYS = ["manageSettings", "manageFields", "manageCertificates",
 
 const SHEET_NAME = "Registrations"; // <-- change to match your actual tab name (used as the default/first cycle's sheet)
 
-// The Sheet this backend reads/writes. SpreadsheetApp.getActiveSpreadsheet()
-// only works when a script is BOUND to a Sheet and running from inside its
-// UI — it returns null for a deployed Web App (which is how this backend
-// actually runs), causing "Cannot read properties of null" errors. Using
-// openById() with an explicit ID works from any context, bound or not.
-// Get this ID from your Sheet's URL: .../spreadsheets/d/THIS_PART/edit
-// The Sheet this backend reads/writes.
-//
-// ⚠️ IMPORTANT — this is deliberately left as getActiveSpreadsheet() (your
-// original setup), NOT hardcoded to a specific Sheet ID. openById() with an
-// explicit ID is more robust for a deployed Web App (getActiveSpreadsheet()
-// can return null in that context — see BACKEND_SETUP_STEPS.md's notes on
-// this), but it must point at YOUR real Sheet — copying OSH's ID here by
-// mistake would silently write سند شباب الدلتا's registrations into a
-// completely different organization's spreadsheet. If registrations aren't
-// saving correctly with the current getActiveSpreadsheet() setup, get YOUR
-// OWN Sheet's ID from its URL (.../spreadsheets/d/THIS_PART/edit) and ask to
-// switch this to openById() with that exact ID.
-function getSpreadsheet_() {
-  return SpreadsheetApp.getActiveSpreadsheet();
-}
-
 // Column order written to the sheet. Keep this order in sync with HEADERS —
 // index i of HEADERS must correspond to index i of the row array built in
 // buildRow_(). The dashboard finds columns by header NAME (not position), so
@@ -173,7 +151,7 @@ const EXTRA_FIELDS = {
   address:        { section: "personal", label: "العنوان بالتفصيل", type: "text", defaultRequired: false },
   birthDate:      { section: "personal", label: "تاريخ الميلاد", type: "date", defaultRequired: false },
   maritalStatus:  { section: "personal", label: "الحالة الاجتماعية", type: "select", options: ["أعزب", "متزوج", "مطلق", "أرمل"], defaultRequired: false },
-  governorate:    { section: "personal", label: "المحافظة", type: "select", options: ["القاهرة", "الجيزة", "القليوبية", "الإسكندرية", "البحيرة", "مطروح", "كفر الشيخ", "الدقهلية", "دمياط", "الشرقية", "الغربية", "المنوفية", "بورسعيد", "الإسماعيلية", "السويس", "شمال سيناء", "جنوب سيناء", "بني سويف", "الفيوم", "المنيا", "أسيوط", "سوهاج", "قنا", "الأقصر", "أسوان", "البحر الأحمر", "الوادي الجديد"], defaultRequired: false },
+  governorate:    { section: "personal", label: "المحافظة", type: "text", defaultRequired: false },
   academicYear:   { section: "education", label: "الفرقة الدراسية", type: "text", defaultRequired: false },
   gradeLevel:     { section: "education", label: "التقدير الدراسي", type: "text", defaultRequired: false },
   facebook:       { section: "contact", label: "رابط الفيسبوك", type: "text", defaultRequired: false },
@@ -974,7 +952,7 @@ function buildFormAiPrompt_(cfg) {
 
   return (
     `انت مساعد ودود بيرد على أسئلة الناس اللي بتحاول تسجل في استمارة "${cfg.formTitle || "التسجيل"}" ` +
-    `بتاعة سند شباب الدلتا (مبادرة طلابية تطوعية في الجامعات المصرية).\n\n` +
+    `بتاعة سند شباب الدلتا (منظمة شبابية تطوعية).\n\n` +
     `معلومات عن الاستمارة دي:\n` +
     `- حالة التسجيل: ${phaseText}\n` +
     `- الحقول المطلوبة/الموجودة في الاستمارة: ${fieldLabels.join("، ") || "الاسم والرقم القومي بس"}\n` +
@@ -1177,7 +1155,7 @@ function handleListCycles_(e) {
   }
   const formId = String(e.parameter.form || "").trim();
   const cfg = getRegConfig_(formId);
-  const ss = getSpreadsheet_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
 
   const claimedByOthers = new Set();
   listAllForms_(true).forEach(f => {
@@ -2093,7 +2071,7 @@ const ACTIVITY_LOG_MAX_ROWS = 500; // trims oldest entries past this so the shee
 
 function logActivity_(accountName, action, details) {
   try {
-    const ss = getSpreadsheet_();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
     let log = ss.getSheetByName(ACTIVITY_LOG_SHEET_NAME);
     if (!log) {
       log = ss.insertSheet(ACTIVITY_LOG_SHEET_NAME);
@@ -2144,7 +2122,7 @@ function describeActionForLog_(payload) {
 
 // action=getActivityLog — returns the most recent N entries, newest first.
 function handleGetActivityLog_() {
-  const ss = getSpreadsheet_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
   const log = ss.getSheetByName(ACTIVITY_LOG_SHEET_NAME);
   if (!log || log.getLastRow() < 2) return jsonOutput_({ status: "success", entries: [] });
   const data = log.getRange(2, 1, log.getLastRow() - 1, 4).getValues();
@@ -2172,7 +2150,7 @@ function handleExportExcel_(payload) {
 
     formatSheetForExport_(sheet);
 
-    const ssId = getSpreadsheet_().getId();
+    const ssId = SpreadsheetApp.getActiveSpreadsheet().getId();
     const gid = sheet.getSheetId();
     const url = `https://docs.google.com/spreadsheets/d/${ssId}/export?format=xlsx&gid=${gid}`;
     const token = ScriptApp.getOAuthToken();
@@ -2501,7 +2479,7 @@ function handleSaveConfig_(payload) {
 // scoped to the given formId (see propKey_ above).
 function startNewCycle_(base, formId) {
   const props = PropertiesService.getScriptProperties();
-  const ss = getSpreadsheet_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
   const k = (b) => propKey_(b, formId);
 
   let cycle = Number(props.getProperty(k("CYCLE_NUMBER")) || "0") + 1;
@@ -3197,7 +3175,7 @@ function getActiveSheetName_(formId) {
 // Looks up a sheet WITHOUT creating it. Used anywhere we must never silently
 // spawn a new empty tab just because someone passed an unexpected name.
 function findSheet_(name) {
-  return getSpreadsheet_().getSheetByName(name);
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
 }
 
 // Gets (and creates, if missing) the CURRENT active sheet for the given form
@@ -3207,7 +3185,7 @@ function findSheet_(name) {
 // the new Settings tab keep behaving exactly like before.
 function getSheet_(formId, nameOpt) {
   const name = nameOpt || getActiveSheetName_(formId);
-  const ss = getSpreadsheet_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(name);
   if (!sheet) {
     sheet = ss.insertSheet(name);
@@ -3381,7 +3359,7 @@ function rowToMember_(headers, row) {
 // to only that form's own sheets/cycles (matched the same way
 // handleListCycles_ matches them — by sheetBaseName).
 function findMemberRowInAllCycles_(code, formId) {
-  const ss = getSpreadsheet_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
   const cfg = getRegConfig_(formId || "");
   const activeName = cfg.activeSheetName;
 
@@ -3561,7 +3539,7 @@ function handleCheckin_(payload) {
 // sheet, so numbering picks up naturally even if you're migrating from an
 // older sheet.
 //
-// `prefix` defaults to MEMBERSHIP_PREFIX ("OSH") — a form can use its own
+// `prefix` defaults to MEMBERSHIP_PREFIX ("DYS") — a form can use its own
 // prefix instead (see cfg.membershipPrefix / the "بادئة رقم العضوية" field
 // in Settings) so e.g. "HR-000045" and "DYS-000045" can coexist without
 // colliding; each prefix keeps its own independent counter.
@@ -3577,7 +3555,7 @@ function findExistingMembershipNo_(nationalId) {
   // Same reasoning as isDuplicateNid_ above — a blank ID must never match
   // another registrant's blank ID and hand out their membership number.
   if (!nationalId) return null;
-  const ss = getSpreadsheet_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheets = ss.getSheets().filter(sh => sh.getName() !== ACTIVITY_LOG_SHEET_NAME);
 
   for (const sh of sheets) {
@@ -3607,7 +3585,7 @@ function generateMembershipNumber_(prefix) {
   lock.waitLock(30000);
   try {
     const used = new Set();
-    const ss = getSpreadsheet_();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
     const numRe = new RegExp("^" + usePrefix + "-(\\d+)$");
 
     ss.getSheets().forEach(sh => {
@@ -3642,50 +3620,20 @@ function generateMembershipNumber_(prefix) {
 // Uses the form's own custom subject/body if it set one (Settings ▸ نص
 // إيميل التأكيد), with {{name}} and {{membershipNo}} placeholders — falls
 // back to the built-in generic Arabic text otherwise.
-//
-// Also embeds a QR code of the membership number directly in the email
-// (as an inline cid: image, not a remote link — so it still shows up even
-// if the recipient's mail client blocks external images, and works
-// offline once the email is downloaded). On event day, the check-in
-// scanner (dys_checkin.html) reads this exact code — see
-// extractMembershipNo_() in this file, which is prefix-agnostic and pulls
-// the membership number out of whatever text the QR encodes.
 function sendConfirmationEmail_(p, membershipNo, cfg) {
   try {
     const fill = (s) => s.replace(/\{\{name\}\}/g, p.name || "").replace(/\{\{membershipNo\}\}/g, membershipNo || "");
     const subject = (cfg && cfg.confirmEmailSubject)
       ? fill(cfg.confirmEmailSubject)
       : "تأكيد التسجيل — سند شباب الدلتا";
-    const bodyText = (cfg && cfg.confirmEmailBody)
+    const body = (cfg && cfg.confirmEmailBody)
       ? fill(cfg.confirmEmailBody)
       : `أهلًا ${p.name}،\n\n` +
         `شكرًا لتسجيلك في سند شباب الدلتا.\n` +
         `رقم عضويتك هو: ${membershipNo}\n\n` +
         `هيتم التواصل معاك قريبًا من فريق اللجنة.\n\n` +
         `تحياتنا،\nفريق سند شباب الدلتا`;
-
-    // Best-effort: a QR image failure (network hiccup, qrserver.com down)
-    // must NEVER block the confirmation email itself from going out.
-    const qrBlob = fetchQrCodeBlob_(membershipNo);
-
-    if (!qrBlob) {
-      // No QR available — send exactly like before, plain text only.
-      sendEmail_(p.email.trim(), subject, bodyText);
-      return true;
-    }
-
-    qrBlob.setName("checkin-qr.png");
-    const htmlBody =
-      `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;font-size:15px;color:#222;line-height:1.8;">` +
-      `<p>${bodyText.replace(/\n/g, "<br>")}</p>` +
-      `<div style="text-align:center;margin:22px 0;padding:18px;border:2px dashed #1668a0;border-radius:14px;background:#f7fafc;">` +
-      `<p style="margin:0 0 10px;font-weight:bold;color:#0e3c5c;">كود الدخول — اعرضه يوم الإيفنت عشان نسجّل حضورك</p>` +
-      `<img src="cid:checkinQr" width="220" height="220" alt="QR كود الدخول" style="display:block;margin:0 auto;">` +
-      `<p style="margin:12px 0 0;font-size:13px;color:#666;">أو رقم العضوية يدويًا: <strong>${membershipNo}</strong></p>` +
-      `</div>` +
-      `</div>`;
-
-    sendEmail_(p.email.trim(), subject, bodyText, { htmlBody, inlineImages: { checkinQr: qrBlob } });
+    sendEmail_(p.email.trim(), subject, body);
     return true;
   } catch (err) {
     console.error("Email send failed:", err);
@@ -4070,7 +4018,7 @@ function handleReviewAccess_(e, approve) {
 
   return HtmlService.createHtmlOutput(
     `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;max-width:480px;margin:60px auto;padding:24px;border:1px solid #ddd;border-radius:12px;text-align:center;">` +
-    `<h2 style="color:#0d2438;">سند شباب الدلتا</h2><p style="font-size:15px;color:#333;">${message}</p></div>`
+    `<h2 style="color:#16321f;">سند شباب الدلتا</h2><p style="font-size:15px;color:#333;">${message}</p></div>`
   );
 }
 
