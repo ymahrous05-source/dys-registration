@@ -196,6 +196,7 @@
     #result { display: none; border-radius: 16px; padding: 16px; margin-top: 4px; }
     #result.ok { background: #eef8ef; border: 1.5px solid #bfe6c4; }
     #result.already { background: #fff8e6; border: 1.5px solid #f0dca0; }
+    #result.warn { background: #fff8e6; border: 1.5px solid #f0dca0; }
     #result.bad { background: #fdecea; border: 1.5px solid #f3c2bd; }
     #result.info { background: #eef3fb; border: 1.5px solid #c6d7f2; }
 
@@ -206,6 +207,7 @@
     .result-status { font-size: 13px; font-weight: 700; margin-top: 6px; }
     #result.ok .result-status { color: var(--dys-green-dark); }
     #result.already .result-status { color: var(--dys-warn); }
+    #result.warn .result-status { color: var(--dys-warn); }
     #result.bad .result-status { color: var(--dys-error); }
 
     .foot {
@@ -308,6 +310,69 @@
     let lastCodeAt = 0;
     let canvas, ctx, rafId;
 
+    // ==================== Audio + haptic feedback ====================
+    // في يوم زحمة، اللي بيسكان مش هيقدر يبص في الشاشة كل ثانية — فبنفرّق
+    // بالصوت بس. AudioContext واحد بيتعمل مرة، ومتصفحات الموبايل بتمنع
+    // تشغيل صوت قبل أول لمسة/كليك على الصفحة، فبنفتحه عند أول تفاعل.
+    let audioCtx = null;
+    function getAudioCtx_() {
+      if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) audioCtx = new AC();
+      }
+      if (audioCtx && audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+      return audioCtx;
+    }
+    ["click", "touchstart"].forEach(evt => {
+      document.addEventListener(evt, () => { getAudioCtx_(); }, { once: true, passive: true });
+    });
+
+    function beep_(freq, durationMs, type, delayMs, volume) {
+      const ctx2 = getAudioCtx_();
+      if (!ctx2) return;
+      const startAt = ctx2.currentTime + (delayMs || 0) / 1000;
+      const osc = ctx2.createOscillator();
+      const gain = ctx2.createGain();
+      osc.type = type || "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, startAt);
+      gain.gain.linearRampToValueAtTime(volume || 0.25, startAt + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, startAt + durationMs / 1000);
+      osc.connect(gain);
+      gain.connect(ctx2.destination);
+      osc.start(startAt);
+      osc.stop(startAt + durationMs / 1000 + 0.02);
+    }
+
+    // نغمة مختلفة لكل نتيجة عشان تتفرق من غير ما تبص للشاشة:
+    //  - ok (حضور جديد):        بيبتين صاعدين واضحين + اهتزازة قصيرة
+    //  - already (مسجّل قبل كده): نغمة واحدة متوسطة (تنبيه مش خطأ)
+    //  - warn (دفع مش مؤكد):     نغمتين متوسطتين متتاليتين (تنبيه واضح بس مش خطأ)
+    //  - bad (كود غلط/مشكلة):    بزّة منخفضة خشنة + اهتزاز متقطع طويل
+    //  - info (تحقق بس/تحميل):   من غير صوت عشان منزعجش المستخدم كل شوية
+    function playFeedback_(cls) {
+      try {
+        if (cls === "ok") {
+          beep_(880, 90, "sine", 0, 0.28);
+          beep_(1320, 120, "sine", 110, 0.28);
+          if (navigator.vibrate) navigator.vibrate(80);
+        } else if (cls === "already") {
+          beep_(600, 170, "sine", 0, 0.24);
+          if (navigator.vibrate) navigator.vibrate([60, 60, 60]);
+        } else if (cls === "warn") {
+          beep_(600, 170, "sine", 0, 0.24);
+          beep_(600, 170, "sine", 220, 0.24);
+          if (navigator.vibrate) navigator.vibrate([60, 60, 60]);
+        } else if (cls === "bad") {
+          beep_(190, 220, "square", 0, 0.2);
+          beep_(190, 220, "square", 260, 0.2);
+          if (navigator.vibrate) navigator.vibrate([150, 80, 150]);
+        }
+      } catch (e) {
+        // الصوت/الاهتزاز مش أساسي لعمل الصفحة — أي خطأ هنا يتجاهل.
+      }
+    }
+
     function showResult(cls, icon, name, meta, status) {
       result.className = cls;
       result.style.display = "block";
@@ -315,6 +380,7 @@
       resultName.textContent = name;
       resultMeta.textContent = meta;
       resultStatus.textContent = status;
+      playFeedback_(cls);
     }
 
     function fmtTime(iso) {
@@ -373,13 +439,60 @@
     });
 
     // ==================== Camera + QR decode loop ====================
+    // ==================== Camera pre-warm ====================
+    // أكبر مصدر للتأخير مش سرعة الكاميرا نفسها — إنها كانت بتتطلب بعد ما
+    // اليوزر يدخل باسورد (يعني بعد ما طلب الشبكة بتاع تسجيل الدخول يخلص
+    // كمان). بنطلب إذن الكاميرا من أول ما الصفحة تفتح، عشان الجهاز ياخد
+    // وقته وهو لسه بيكتب الباسورد، فيوصل شاشة السكان والكاميرا جاهزة
+    // فورًا أو شبه فورًا.
+    let cameraStreamPromise = null;
+    function preloadCamera_() {
+      if (cameraStreamPromise) return cameraStreamPromise;
+      if (typeof jsQR === "undefined") return null;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return null;
+      cameraStreamPromise = navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          // قللنا الدقة المطلوبة من 1280x720 لـ 960x540 — التفاوض على
+          // دقة أعلى مع هاردوير الكاميرا هو غالبًا سبب البطء، والدقة دي
+          // لسه كفاية لقراءة QR من مسافة عادية.
+          width: { ideal: 960 },
+          height: { ideal: 540 },
+        },
+      });
+      // لو الطلب فشل (رفض إذن مثلاً)، منسيبش الوعد الفاشل متسجّل —
+      // startCamera_ هتحاول تاني وتظهر رسالة الخطأ الصح وقتها.
+      cameraStreamPromise.catch(() => { cameraStreamPromise = null; });
+      return cameraStreamPromise;
+    }
+    preloadCamera_();
+
+    // ==================== Camera + QR decode loop ====================
     function startCamera_() {
+      if (typeof jsQR === "undefined") {
+        camOff.style.display = "flex";
+        camOff.textContent = "مكتبة قراءة الـ QR ماتحمّلتش (مشكلة في النت) — رفرش الصفحة أو استخدم الكتابة اليدوية تحت.";
+        return;
+      }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         camOff.style.display = "flex";
         camOff.textContent = "المتصفح ده مش بيدعم الكاميرا — استخدم الكتابة اليدوية تحت.";
         return;
       }
-      navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+      camOff.style.display = "flex";
+      camOff.textContent = "بيتم تشغيل الكاميرا...";
+
+      // بنستخدم الستريم اللي اتجهّز مقدمًا لو موجود؛ لو مش موجود (فشل
+      // preload لأي سبب)، بنطلبه دلوقتي كـ fallback زي الأول بالظبط.
+      const streamPromise = preloadCamera_() || navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 960 },
+          height: { ideal: 540 },
+        },
+      });
+
+      streamPromise
         .then(stream => {
           video.srcObject = stream;
           video.play();
@@ -387,6 +500,30 @@
           ctx = canvas.getContext("2d", { willReadFrequently: true });
           scanning = true;
           rafId = requestAnimationFrame(scanLoop_);
+
+          // Hide the "starting camera..." message as soon as a real frame
+          // is available, instead of leaving it up for the full duration
+          // of the camera's hardware/auto-exposure warm-up.
+          video.addEventListener("loadeddata", () => {
+            camOff.style.display = "none";
+          }, { once: true });
+
+          // Many Android rear cameras default to a fixed or slow focus via
+          // getUserMedia and never sharpen up at the close range a QR code
+          // is normally held at — the video looks "fine" but every frame is
+          // just soft enough that jsQR can't lock onto it. Ask for
+          // continuous autofocus when the device exposes that capability.
+          const track = stream.getVideoTracks()[0];
+          if (track && track.getCapabilities) {
+            try {
+              const caps = track.getCapabilities();
+              if (caps.focusMode && caps.focusMode.includes("continuous")) {
+                track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }).catch(() => {});
+              }
+            } catch (e) {
+              // getCapabilities/applyConstraints not supported on this browser — ignore.
+            }
+          }
         })
         .catch(() => {
           camOff.style.display = "flex";
@@ -400,28 +537,59 @@
       const stream = video.srcObject;
       if (stream) stream.getTracks().forEach(t => t.stop());
       video.srcObject = null;
+      // الستريم اللي كان متجهّز مقدمًا بقى متوقف دلوقتي (تراكاته اتقفلت) —
+      // لازم نمسحه ونجهّز واحد جديد عشان يكون جاهز لو اليوزر سجّل دخول
+      // تاني بعد الخروج.
+      cameraStreamPromise = null;
+      preloadCamera_();
     }
 
     // Ignore re-scanning the exact same code within a few seconds — someone
     // holding their QR steady in frame shouldn't spam ten submissions.
     const RESCAN_COOLDOWN_MS = 4000;
 
+    // jsQR itself, and getImageData on some devices, can throw on an odd
+    // frame (e.g. camera resizing mid-frame, or jsQR's own known edge-case
+    // throws on certain pixel patterns). Without a try/catch here, ONE bad
+    // frame throws out of scanLoop_ *before* it reaches the
+    // requestAnimationFrame(scanLoop_) call at the bottom — so the loop
+    // never reschedules itself. The video keeps playing (camera looks
+    // "on"), but nothing is ever decoded again. That's the "مش بيلقط"
+    // symptom. Catching here guarantees the loop always reschedules.
+    // نغمة قصيرة ومحايدة بس بمجرد ما الكاميرا "تلقط" كود — قبل ما نستنى
+    // رد السيرفر خالص. كده اللي بيسكان يعرف إن الكاميرا مسكت الكود فورًا،
+    // وبعدين البيب الصح/الغلط بيجيله لما نتيجة التحقق ترجع.
+    function playScanTick_() {
+      try {
+        beep_(1000, 40, "sine", 0, 0.18);
+        if (navigator.vibrate) navigator.vibrate(20);
+      } catch (e) {}
+    }
+
     function scanLoop_() {
       if (!scanning) return;
-      if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const qr = jsQR(imageData.data, imageData.width, imageData.height);
-        if (qr && qr.data) {
-          const now = Date.now();
-          if (qr.data !== lastCode || now - lastCodeAt > RESCAN_COOLDOWN_MS) {
-            lastCode = qr.data;
-            lastCodeAt = now;
-            handleCode_(qr.data);
+      try {
+        if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const qr = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: "attemptBoth",
+          });
+          if (qr && qr.data) {
+            const now = Date.now();
+            if (qr.data !== lastCode || now - lastCodeAt > RESCAN_COOLDOWN_MS) {
+              lastCode = qr.data;
+              lastCodeAt = now;
+              playScanTick_();
+              handleCode_(qr.data);
+            }
           }
         }
+      } catch (err) {
+        // Log it, but never let a single bad frame kill scanning permanently.
+        console.error("scanLoop_ frame error:", err);
       }
       rafId = requestAnimationFrame(scanLoop_);
     }
@@ -464,23 +632,36 @@
         }
         const m = res.member || {};
         const meta = [m.role, m.faculty, m.membershipNo].filter(Boolean).join(" · ");
+        // Only shown for forms that actually use the payment-receipt field —
+        // hasPaymentField tells that apart from "column exists but blank".
+        const paymentNote = m.hasPaymentField
+          ? (m.paymentStatus === "تم التأكيد ✓" ? "💳 الدفع مؤكد" : "⚠️ الدفع لسه مش متأكد")
+          : "";
 
         if (verifyOnly) {
           const already = !!res.checkedInAt;
+          const baseStatus = already ? `اتسجل حضوره الساعة ${fmtTime(res.checkedInAt)}` : "لسه ماسجّلش حضور — دا تحقق بس، من غير تسجيل";
           showResult(already ? "already" : "info", already ? "✅" : "ℹ️", m.name || "—", meta,
-            already ? `اتسجل حضوره الساعة ${fmtTime(res.checkedInAt)}` : "لسه ماسجّلش حضور — دا تحقق بس، من غير تسجيل");
+            paymentNote ? `${baseStatus} — ${paymentNote}` : baseStatus);
           return;
         }
 
         if (res.status === "already") {
-          showResult("already", "⚠️", m.name || "—", meta, `مسجّل حضور بالفعل من الساعة ${fmtTime(res.checkedInAt)}`);
+          const baseStatus = `مسجّل حضور بالفعل من الساعة ${fmtTime(res.checkedInAt)}`;
+          showResult("already", "⚠️", m.name || "—", meta, paymentNote ? `${baseStatus} — ${paymentNote}` : baseStatus);
           return;
         }
 
         // status === "success" — brand new check-in
         sessionCheckins += 1;
         sessionCountEl.textContent = `تم تسجيل ${sessionCheckins} من بداية الجلسة`;
-        showResult("ok", "✅", m.name || "—", meta, `اتسجل الحضور الساعة ${fmtTime(res.checkedInAt)}`);
+        const baseStatus = `اتسجل الحضور الساعة ${fmtTime(res.checkedInAt)}`;
+        // Unpaid gets its own "warn" look instead of the normal green "ok" —
+        // this never blocks check-in, just makes an unpaid arrival
+        // impossible to miss for whoever's on the door.
+        const unpaid = m.hasPaymentField && m.paymentStatus !== "تم التأكيد ✓";
+        showResult(unpaid ? "warn" : "ok", unpaid ? "⚠️" : "✅", m.name || "—", meta,
+          paymentNote ? `${baseStatus} — ${paymentNote}` : baseStatus);
       }).catch(() => {
         showResult("bad", "📡", "تعذر الاتصال", "", "اتأكد من الإنترنت وجرب تاني");
       });
