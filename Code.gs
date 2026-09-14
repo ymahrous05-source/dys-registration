@@ -40,7 +40,7 @@
 // deployments ▸ Edit (✏️) ▸ New version ▸ Deploy (see BACKEND_SETUP_STEPS.md
 // step 7). This single check rules out the #1 cause of "I edited the code
 // but nothing changed."
-const CODE_VERSION = "2026-08-25-checkin-scanner";
+const CODE_VERSION = "2026-09-14-formtype-emailqr";
 
 // ---------------------------------------------------------------------------
 // Google Sign-In (optional — the old shared password keeps working forever
@@ -97,8 +97,28 @@ function sendEmail_(to, subject, body, extraOptions) {
 // so it's optional). Leave either/both placeholders as-is to skip that
 // provider entirely — the chat still works with just one, or falls back to
 // "use the quick questions instead" if neither is set.
-const GEMINI_API_KEY = "AQ.Ab8RN6JHY6laQxjm-W-_q3-PthfhbDrTfvY9dFth6cOJiwUD8g";
-const GROK_API_KEY = "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";
+// SECURITY: the actual keys are NOT stored in source anymore. They live in
+// Script Properties (GEMINI_API_KEY / GROK_API_KEY) so they never leak through
+// a shared zip / repo / copy of this file. Run setupAiKeys() ONCE from the
+// Apps Script editor (it reads the two constants right below it and saves them
+// to Script Properties — then clear those two constants!), or set the two
+// properties manually: Project Settings ▸ Script Properties ▸ Add script
+// property. Leave either/both unset to skip that provider entirely — the chat
+// still works with just one, or falls back to "use the quick questions
+// instead" if neither is set.
+const GEMINI_API_KEY = PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY") || "PASTE_YOUR_GEMINI_KEY";
+const GROK_API_KEY = PropertiesService.getScriptProperties().getProperty("GROK_API_KEY") || "PASTE_YOUR_GROK_KEY";
+
+// One-time helper: copies keys you temporarily paste into the two constants
+// above into Script Properties. Run once, then DELETE the pasted values from
+// this file before saving/cloning/sharing it again.
+function setupAiKeys() {
+  const props = PropertiesService.getScriptProperties();
+  const g = String(typeof GEMINI_API_KEY !== "undefined" ? GEMINI_API_KEY : "").trim();
+  const x = String(typeof GROK_API_KEY !== "undefined" ? GROK_API_KEY : "").trim();
+  if (g && aiConfigured_(g)) props.setProperty("GEMINI_API_KEY", g);
+  if (x && aiConfigured_(x)) props.setProperty("GROK_API_KEY", x);
+}
 
 // Simple daily message cap (shared across all forms) so a misconfigured
 // widget or a bored visitor can't run up an unexpected API bill overnight.
@@ -114,6 +134,57 @@ const AI_DAILY_LIMIT = 300;
 const PERMISSION_KEYS = ["manageSettings", "manageFields", "manageCertificates", "manageAccounts"];
 
 const SHEET_NAME = "Registrations"; // <-- change to match your actual tab name (used as the default/first cycle's sheet)
+
+// ---------------------------------------------------------------------------
+// Form "type" — a lightweight, per-form descriptive label (see "نوع الفورم"
+// in the Settings tab). It does NOT gate or restrict anything by itself —
+// every underlying feature (the receiptPhoto field, payment confirmation,
+// the QR-in-email option below) already works completely independently of
+// this setting. All it does is:
+//   1. Nudge sensible defaults ONCE when a form is first switched to
+//      "event" — turns the "📷 صورة إيصال الدفع" field on (see
+//      handleSaveConfig_'s EVENT_FIELDS_PRIMED guard below), same one-time-
+//      seed pattern as getCustomFields_'s volunteer/group-code fields above.
+//   2. Suggest which CONFIRM_EMAIL_TEMPLATES preset to reach for.
+// So an admin can always still turn payment tools on/off by hand regardless
+// of what's picked here — this is a shortcut, never a lock.
+const FORM_TYPES = ["data", "event"];
+
+// Ready-made confirmation-email presets ("قوالب جاهزة") shown in the
+// Settings tab's "قالب جاهز لإيميل التأكيد" dropdown. Picking one just
+// prefills the normal confirmEmailSubject / confirmEmailBody /
+// confirmEmailIncludeQr settings client-side (see populateConfirmEmailTemplates_
+// and its change handler in dys_dashboard.html) — nothing about WHICH
+// preset was picked is stored anywhere, so the admin can still hand-edit
+// the text afterward, or switch presets again later, exactly like typing
+// the subject/body in from scratch. Only used by handleGetConfig_ (admin-
+// only) — handlePublicConfig_ explicitly whitelists the fields it sends the
+// public form, so this never reaches an unauthenticated visitor.
+const CONFIRM_EMAIL_TEMPLATES = {
+  plain_data: {
+    label: "بيانات بس — إيميل عادي من غير QR",
+    includeQr: false,
+    subject: "تأكيد التسجيل — سند شباب الدلتا",
+    body:
+      "أهلًا {{name}}،\n\n" +
+      "شكرًا لتسجيلك في سند شباب الدلتا.\n" +
+      "رقم عضويتك هو: {{membershipNo}}\n\n" +
+      "هيتم التواصل معاك قريبًا من فريق اللجنة.\n\n" +
+      "تحياتنا،\nفريق سند شباب الدلتا",
+  },
+  event_checkin: {
+    label: "إيفنت — إيميل فيه QR للحضور",
+    includeQr: true,
+    subject: "تأكيد حجزك — سند شباب الدلتا",
+    body:
+      "أهلًا {{name}}،\n\n" +
+      "شكرًا لتسجيلك، حجزك مبدئيًا مسجّل ✅\n" +
+      "رقم عضويتك: {{membershipNo}}\n\n" +
+      "هتلاقي كود QR مرفق في الإيميل ده — وريه لفريق الاستقبال يوم الإيفنت عشان تسجيل حضورك بسرعة.\n" +
+      "لو الإيفنت بيتطلب دفع، هيتواصل معاك فريق اللجنة بتفاصيل الدفع، وهتوصلك رسالة تأكيد منفصلة بمجرد ما نستلم فلوسك.\n\n" +
+      "تحياتنا،\nفريق سند شباب الدلتا",
+  },
+};
 
 // Column order written to the sheet. Keep this order in sync with HEADERS —
 // index i of HEADERS must correspond to index i of the row array built in
@@ -1960,6 +2031,19 @@ function getRegConfig_(formId) {
   return {
     formId: formId || "",
     formTitle: props.getProperty(k("FORM_TITLE")) || "",
+    // "data" (default — matches every existing deployment's behavior
+    // exactly, nothing changes until an admin explicitly picks "event") or
+    // "event" — see FORM_TYPES above for what this does and doesn't do.
+    formType: props.getProperty(k("FORM_TYPE")) === "event" ? "event" : "data",
+    // Whether the plain confirmation email (sendConfirmationEmail_) has an
+    // inline check-in QR attached — default false, i.e. exactly the old
+    // plain-text-only email every existing deployment already sends.
+    confirmEmailIncludeQr: props.getProperty(k("CONFIRM_EMAIL_INCLUDE_QR")) === "true",
+    // Admin-only — the ready-made presets the Settings tab's dropdown picks
+    // from (see CONFIRM_EMAIL_TEMPLATES above). Not form-specific data, just
+    // riding along on the config response so the dashboard doesn't need a
+    // separate round trip for it.
+    confirmEmailTemplates: CONFIRM_EMAIL_TEMPLATES,
     // Custom "trust note" line under the logo — falls back to the form's own
     // built-in default text (see dys_form.html) when never set.
     trustNote: props.getProperty(k("TRUST_NOTE")) || "",
@@ -2310,7 +2394,7 @@ function handleRemoveAdminAccount_(payload) {
 
 // action=reviewAccess (POST, dashboard-side) — payload: {email, approve}.
 // Same effect as clicking the "قبول"/"رفض" link in the notification email,
-// just from inside "👥 حسابات الدخول" for whoever's already logged in with
+// just from inside "👥 حسابات الدخول" for whوever's already logged in with
 // manageAccounts — handy if the email never arrives or they're already in
 // the dashboard when a request comes in.
 function handleDashboardReviewAccess_(payload) {
@@ -2392,6 +2476,37 @@ function handleSaveConfig_(payload) {
   const endAt = String(payload.endAt || "").trim();
 
   props.setProperty(k("FORM_TITLE"), formTitle);
+
+  // "نوع الفورم" ("data" | "event") — see FORM_TYPES above. First time a
+  // form is switched TO "event", nudge the receipt-photo field on as a
+  // one-off convenience default (guarded by its own marker, same seed
+  // pattern as getCustomFields_'s volunteer/group-code fields, so flipping
+  // the type back and forth later never re-forces it) — the admin can still
+  // turn it back off from "🧩 حقول الاستمارة" any time.
+  if (typeof payload.formType !== "undefined") {
+    const formType = FORM_TYPES.indexOf(payload.formType) > -1 ? payload.formType : "data";
+    const previousFormType = props.getProperty(k("FORM_TYPE")) === "event" ? "event" : "data";
+    props.setProperty(k("FORM_TYPE"), formType);
+    if (formType === "event" && previousFormType !== "event") {
+      const primedKey = k("EVENT_FIELDS_PRIMED");
+      if (!props.getProperty(primedKey)) {
+        const fieldCfg = getFieldConfig_(formId);
+        if (fieldCfg.receiptPhoto && !fieldCfg.receiptPhoto.enabled) {
+          fieldCfg.receiptPhoto.enabled = true;
+          props.setProperty(k("FIELD_CONFIG"), JSON.stringify(fieldCfg));
+        }
+        props.setProperty(primedKey, "1");
+      }
+    }
+  }
+
+  // Whether the plain confirmation email includes an inline check-in QR —
+  // see sendConfirmationEmail_ below. Default (unset/false) sends exactly
+  // the same plain-text-only email every existing deployment already sends.
+  if (typeof payload.confirmEmailIncludeQr !== "undefined") {
+    props.setProperty(k("CONFIRM_EMAIL_INCLUDE_QR"), payload.confirmEmailIncludeQr ? "true" : "false");
+  }
+
   props.setProperty(k("TRUST_NOTE"), trustNote);
   props.setProperty(k("FORM_SUBTITLE"), formSubtitle);
   // "نصوص متقدمة" — the admin pastes a JSON object like {"btnNext": "كمل"}.
@@ -3620,6 +3735,17 @@ function generateMembershipNumber_(prefix) {
 // Uses the form's own custom subject/body if it set one (Settings ▸ نص
 // إيميل التأكيد), with {{name}} and {{membershipNo}} placeholders — falls
 // back to the built-in generic Arabic text otherwise.
+//
+// Optional inline QR (Settings ▸ "إرفاق QR كود جوه إيميل التأكيد" —
+// cfg.confirmEmailIncludeQr): when on, this sends an HTML email with the
+// same check-in QR the certificate embeds (see fetchQrCodeBlob_ /
+// sendCertificateEmailCore_'s qrPayload), so handleCheckin_'s scanner reads
+// either one identically. Best-effort — if the free QR service is
+// slow/down, this silently falls back to the exact same plain-text email
+// every deployment already sends (see fetchQrCodeBlob_'s null-on-failure
+// contract), rather than failing the whole confirmation over a decorative
+// image. Default (cfg.confirmEmailIncludeQr unset/false) is byte-for-byte
+// the same plain email as before this option existed.
 function sendConfirmationEmail_(p, membershipNo, cfg) {
   try {
     const fill = (s) => s.replace(/\{\{name\}\}/g, p.name || "").replace(/\{\{membershipNo\}\}/g, membershipNo || "");
@@ -3633,7 +3759,27 @@ function sendConfirmationEmail_(p, membershipNo, cfg) {
         `رقم عضويتك هو: ${membershipNo}\n\n` +
         `هيتم التواصل معاك قريبًا من فريق اللجنة.\n\n` +
         `تحياتنا،\nفريق سند شباب الدلتا`;
-    sendEmail_(p.email.trim(), subject, body);
+
+    let qrBlob = null;
+    if (cfg && cfg.confirmEmailIncludeQr) {
+      const qrPayload = `سند شباب الدلتا | ${p.name || ""} | عضوية ${membershipNo} | ` +
+        Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy");
+      qrBlob = fetchQrCodeBlob_(qrPayload);
+    }
+
+    if (qrBlob) {
+      qrBlob.setName("qrcode.png");
+      const htmlBody =
+        `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;font-size:15px;color:#222;line-height:1.8;">` +
+        body.replace(/\n/g, "<br>") +
+        `<div style="margin-top:20px;text-align:center;">` +
+        `<img src="cid:confirmQr" width="180" height="180" alt="QR الحضور">` +
+        `<div style="font-size:13px;color:#666;margin-top:6px;">وريه لفريق الاستقبال يوم الإيفنت لتسجيل حضورك</div>` +
+        `</div></div>`;
+      sendEmail_(p.email.trim(), subject, body, { htmlBody, inlineImages: { confirmQr: qrBlob } });
+    } else {
+      sendEmail_(p.email.trim(), subject, body);
+    }
     return true;
   } catch (err) {
     console.error("Email send failed:", err);
@@ -3690,7 +3836,11 @@ function queueConfirmationEmail_(p, membershipNo, cfg) {
   try {
     const props = PropertiesService.getScriptProperties();
     const slimPayload = { name: p.name || "", email: p.email };
-    const slimCfg = { confirmEmailSubject: cfg && cfg.confirmEmailSubject, confirmEmailBody: cfg && cfg.confirmEmailBody };
+    const slimCfg = {
+      confirmEmailSubject: cfg && cfg.confirmEmailSubject,
+      confirmEmailBody: cfg && cfg.confirmEmailBody,
+      confirmEmailIncludeQr: !!(cfg && cfg.confirmEmailIncludeQr),
+    };
     const key = "PENDING_CONF_EMAIL_" + membershipNo + "_" + Date.now() + "_" + Math.floor(Math.random() * 1e6);
     props.setProperty(key, JSON.stringify({ p: slimPayload, membershipNo: membershipNo, cfg: slimCfg }));
 
