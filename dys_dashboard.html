@@ -1529,6 +1529,17 @@
               <input type="text" id="cfgFormTitle" placeholder="مثال: استمارة تسجيل سند شباب الدلتا 2026">
             </div>
             <div class="settings-field">
+              <label for="cfgFormType">نوع الفورم</label>
+              <select id="cfgFormType">
+                <option value="data">بيانات بس — مفيش تحصيل فلوس</option>
+                <option value="event">إيفنت — هيتم تحصيل فلوس (هيظهر إيصال الدفع وتأكيد الدفع)</option>
+              </select>
+              <p class="hint">اختيار "إيفنت" بيفعّل حقل "صورة إيصال الدفع" تلقائيًا (مرة واحدة بس، تقدر تعطّله بعدها
+                من "🧩 حقول الاستمارة" لو عايز) وبيقترحلك قالب إيميل تأكيد فيه QR للحضور تحت. الاختيار ده وصفي بس —
+                مش بيقفل أو يمنع أي حاجة تانية، تقدر تفعّل أدوات الدفع أو تعطّلها يدويًا في أي وقت بغض النظر عن
+                الاختيار هنا.</p>
+            </div>
+            <div class="settings-field">
               <label for="cfgTrustNote">جملة الثقة اللي تحت اللوجو (سيب فاضي = النص الافتراضي)</label>
               <input type="text" id="cfgTrustNote" placeholder="مثال: جاهز تكون جزء من الحدث؟ سجّل بياناتك وخلّينا نشوفك هناك">
             </div>
@@ -1566,6 +1577,23 @@
                 <label for="cfgEndAt">نهاية التسجيل (سيب فاضي = بدون حد)</label>
                 <input type="datetime-local" id="cfgEndAt">
               </div>
+            </div>
+            <div class="settings-field">
+              <label for="cfgConfirmEmailTemplate">قالب جاهز لإيميل التأكيد (اختياري)</label>
+              <select id="cfgConfirmEmailTemplate">
+                <option value="">— اختار قالب جاهز (هيملأ العنوان والنص والـ QR تحت) —</option>
+              </select>
+              <p class="hint">ده بس بيملأ الخانات تحت كبداية — تقدر تعدّل فيها زي ما تحب بعد كده، ولازم تدوس
+                "حفظ الإعدادات" تحت عشان الاختيار يتسجّل.</p>
+            </div>
+            <div class="settings-field">
+              <label class="autorefresh-toggle" style="font-weight:600;">
+                <input type="checkbox" id="cfgConfirmEmailIncludeQr">
+                إرفاق QR كود جوه إيميل التأكيد (للحضور/تسجيل الدخول في الإيفنت)
+              </label>
+              <p class="hint">لو مفعّل، هيتبعت مع إيميل التأكيد كود QR فيه اسم المسجّل ورقم عضويته — نفس الكود اللي
+                شاشة الـ "📷 تسجيل حضور" بتقرأه (شوف dys_checkin.html). لو الفورم بيانات بس ومفيهوش حدث حضوري، سيبها
+                من غير تفعيل عادي.</p>
             </div>
             <div class="settings-field">
               <label for="cfgConfirmEmailSubject">عنوان إيميل التأكيد (سيب فاضي = النص الافتراضي)</label>
@@ -2784,6 +2812,7 @@
           if (res.status !== "success") throw new Error(res.message || "error");
           const cfg = res.config;
           document.getElementById("cfgFormTitle").value = cfg.formTitle || "";
+          document.getElementById("cfgFormType").value = (cfg.formType === "event") ? "event" : "data";
           document.getElementById("cfgTrustNote").value = cfg.trustNote || "";
           document.getElementById("cfgFormSubtitle").value = cfg.formSubtitle || "";
           document.getElementById("cfgI18nOverrides").value = (cfg.i18nOverrides && Object.keys(cfg.i18nOverrides).length) ? JSON.stringify(cfg.i18nOverrides, null, 2) : "";
@@ -2791,8 +2820,10 @@
           document.getElementById("cfgMembershipPrefix").value = cfg.membershipPrefix || "";
           document.getElementById("cfgStartAt").value = isoToLocalInputValue(cfg.startAt);
           document.getElementById("cfgEndAt").value = isoToLocalInputValue(cfg.endAt);
+          document.getElementById("cfgConfirmEmailIncludeQr").checked = !!cfg.confirmEmailIncludeQr;
           document.getElementById("cfgConfirmEmailSubject").value = cfg.confirmEmailSubject || "";
           document.getElementById("cfgConfirmEmailBody").value = cfg.confirmEmailBody || "";
+          populateConfirmEmailTemplates_(cfg.confirmEmailTemplates || {});
           document.getElementById("cfgPaymentConfirmedEmailSubject").value = cfg.paymentConfirmedEmailSubject || "";
           document.getElementById("cfgPaymentConfirmedEmailBody").value = cfg.paymentConfirmedEmailBody || "";
           document.getElementById("cfgPaymentReminderEmailSubject").value = cfg.paymentReminderEmailSubject || "";
@@ -3517,12 +3548,41 @@
         .finally(() => { btn.disabled = false; });
     });
 
+    // Fills the "قالب جاهز لإيميل التأكيد" <select> from the presets the
+    // server sent (cfg.confirmEmailTemplates — see CONFIRM_EMAIL_TEMPLATES
+    // in Code.gs), and remembers them so picking one can prefill the
+    // subject/body/QR-checkbox fields below without another round trip.
+    let confirmEmailTemplatesCache_ = {};
+    function populateConfirmEmailTemplates_(templates) {
+      confirmEmailTemplatesCache_ = templates || {};
+      const select = document.getElementById("cfgConfirmEmailTemplate");
+      // Keep the first "— اختار قالب —" placeholder option, drop the rest,
+      // then rebuild — this runs every time the Settings tab (re)loads, e.g.
+      // after switching which form you're managing.
+      select.innerHTML = `<option value="">— اختار قالب جاهز (هيملأ العنوان والنص والـ QR تحت) —</option>`;
+      Object.keys(confirmEmailTemplatesCache_).forEach(key => {
+        const t = confirmEmailTemplatesCache_[key];
+        const opt = document.createElement("option");
+        opt.value = key;
+        opt.textContent = t.label || key;
+        select.appendChild(opt);
+      });
+    }
+    document.getElementById("cfgConfirmEmailTemplate").addEventListener("change", (e) => {
+      const t = confirmEmailTemplatesCache_[e.target.value];
+      if (!t) return; // "— اختار قالب —" placeholder chosen — leave whatever's typed alone
+      document.getElementById("cfgConfirmEmailSubject").value = t.subject || "";
+      document.getElementById("cfgConfirmEmailBody").value = t.body || "";
+      document.getElementById("cfgConfirmEmailIncludeQr").checked = !!t.includeQr;
+    });
+
     function collectConfigPayload() {
       const startVal = document.getElementById("cfgStartAt").value; // "" or "YYYY-MM-DDTHH:mm"
       const endVal = document.getElementById("cfgEndAt").value;
       return {
         action: "saveConfig",
         formTitle: document.getElementById("cfgFormTitle").value.trim(),
+        formType: document.getElementById("cfgFormType").value,
         trustNote: document.getElementById("cfgTrustNote").value.trim(),
         formSubtitle: document.getElementById("cfgFormSubtitle").value.trim(),
         i18nOverrides: document.getElementById("cfgI18nOverrides").value.trim() || "{}",
@@ -3530,6 +3590,7 @@
         membershipPrefix: document.getElementById("cfgMembershipPrefix").value.trim(),
         startAt: startVal ? new Date(startVal).toISOString() : "",
         endAt: endVal ? new Date(endVal).toISOString() : "",
+        confirmEmailIncludeQr: document.getElementById("cfgConfirmEmailIncludeQr").checked,
         confirmEmailSubject: document.getElementById("cfgConfirmEmailSubject").value.trim(),
         confirmEmailBody: document.getElementById("cfgConfirmEmailBody").value.trim(),
         paymentConfirmedEmailSubject: document.getElementById("cfgPaymentConfirmedEmailSubject").value.trim(),
